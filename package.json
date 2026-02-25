@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "start": "tsx src/server/index.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -18,9 +19,11 @@
   "dependencies": {
     "@arkade-os/boltz-swap": "^0.2.20",
     "@arkade-os/sdk": "^0.3.13",
+    "@hono/node-server": "^1.19.9",
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
     "@scure/btc-signer": "^2.0.1",
-    "eventsource": "^4.1.0"
+    "eventsource": "^4.1.0",
+    "hono": "^4.12.2"
   }
 }

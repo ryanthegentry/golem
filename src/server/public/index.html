@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0D0D0D">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Golem">
+  <title>Golem</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@700,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Main View -->
+    <div id="view-main" class="view active">
+      <header class="header">
+        <div class="header-brand">
+          <span class="header-logo">&#x20bf;</span>
+          <span class="header-wordmark">GOLEM</span>
+        </div>
+        <div class="agent-status" id="agent-status">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="status-label" id="status-label">Connecting</span>
+        </div>
+      </header>
+
+      <section class="balance-hero">
+        <div class="balance-btc" id="balance-btc">0.00000000</div>
+        <div class="balance-label">BTC</div>
+        <div class="balance-sats" id="balance-sats">0 sats</div>
+      </section>
+
+      <div class="action-buttons">
+        <button class="btn btn-primary" id="btn-send">Send</button>
+        <button class="btn btn-secondary" id="btn-receive">Receive</button>
+      </div>
+
+      <section class="agent-card" id="agent-card">
+        <div class="agent-card-header">
+          <span class="status-dot status-dot-sm" id="agent-card-dot"></span>
+          <span class="agent-card-title">Golem is watching</span>
+        </div>
+        <div class="agent-card-detail" id="agent-card-detail">Waiting for status...</div>
+      </section>
+
+      <section class="tx-section">
+        <h3 class="tx-section-title">Activity</h3>
+        <div class="tx-list" id="tx-list">
+          <div class="tx-empty">No transactions yet</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Send Modal -->
+    <div id="view-send" class="modal">
+      <div class="modal-backdrop" data-close="send"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title">Send</h2>
+          <button class="modal-close" data-close="send">&times;</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address</label>
+          <input type="text" class="form-input" id="send-address" placeholder="Ark address" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Amount (sats)</label>
+          <input type="number" class="form-input mono" id="send-amount" placeholder="0" min="1">
+          <div class="form-hint" id="send-btc-equiv"></div>
+        </div>
+        <div class="form-group">
+          <div class="oor-limit" id="oor-limit"></div>
+        </div>
+        <div class="send-error" id="send-error"></div>
+        <button class="btn btn-primary btn-full" id="btn-confirm-send">Send</button>
+        <div class="send-success" id="send-success"></div>
+      </div>
+    </div>
+
+    <!-- Receive Modal -->
+    <div id="view-receive" class="modal">
+      <div class="modal-backdrop" data-close="receive"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title">Receive</h2>
+          <button class="modal-close" data-close="receive">&times;</button>
+        </div>
+        <div class="receive-section">
+          <label class="form-label">Ark Address</label>
+          <div class="address-display">
+            <span class="address-text mono" id="recv-ark-addr">Loading...</span>
+            <button class="btn-copy" data-copy="recv-ark-addr">Copy</button>
+          </div>
+        </div>
+        <div class="receive-section">
+          <label class="form-label">On-chain Boarding Address</label>
+          <div class="address-display">
+            <span class="address-text mono" id="recv-boarding-addr">Loading...</span>
+            <button class="btn-copy" data-copy="recv-boarding-addr">Copy</button>
+          </div>
+          <div class="form-hint">Send on-chain BTC here to board into Ark</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

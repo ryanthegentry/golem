@@ -1,6 +1,6 @@
 import { Wallet, VtxoManager, Ramps } from '@arkade-os/sdk';
 import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
-import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent } from '@arkade-os/sdk';
+import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction } from '@arkade-os/sdk';
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
 import type { GolemWalletConfig } from './config.js';
@@ -136,6 +136,11 @@ export class GolemWallet {
     const address = await this.getAddress();
     const total = vtxos.reduce((sum, v) => sum + BigInt(v.value), 0n);
     return this.settle({ inputs: vtxos, outputs: [{ address, amount: total }] }, eventCallback);
+  }
+
+  /** Get transaction history */
+  async getTransactionHistory(): Promise<ArkTransaction[]> {
+    return this.sdkWallet.getTransactionHistory();
   }
 
   /**
