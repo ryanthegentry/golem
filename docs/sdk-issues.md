@@ -147,3 +147,100 @@ const wallet = await Wallet.create({
 Option B: Document the polyfill requirement in the README for Node.js users.
 
 Option C: Bundle a lightweight SSE client internally (e.g., using `fetch` with streaming, which Node.js supports natively since v18).
+
+---
+
+## 3. `isVtxoExpiringSoon()` missing block-height heuristic guard that `isExpired()` has
+
+**Title:** `isVtxoExpiringSoon()` compares block heights against `Date.now()` on regtest/mutinynet, producing wrong results
+
+**Environment:**
+- `@arkade-os/sdk`: 0.3.13
+- Ark server: mutinynet (`https://mutinynet.arkade.sh`)
+- Any network where the server returns `expiresAt` as a block height rather than a Unix timestamp
+
+**Reproduction steps:**
+1. Connect to a regtest or mutinynet Ark server
+2. Board funds and create VTXOs
+3. Call `VtxoManager.getExpiringVtxos()` or directly call `isVtxoExpiringSoon(vtxo, thresholdMs)`
+4. Observe that no VTXOs are ever reported as "expiring soon", regardless of threshold
+
+**Expected behavior:**
+VTXOs approaching their expiry should be detected by `isVtxoExpiringSoon()`, enabling `VtxoManager.renewVtxos()` to refresh them before they expire.
+
+**Actual behavior:**
+`isVtxoExpiringSoon()` always returns `false` because the comparison is nonsensical when `batchExpiry` is derived from a block height.
+
+The data flow:
+1. Server returns `expiresAt` as a block height (e.g., `7775744`)
+2. Indexer converts: `batchExpiry = Number(expiresAt) * 1000` → `7775744000`
+   - `providers/indexer.js` line 350-351
+   - `providers/expoIndexer.js` line 20-21
+3. `isVtxoExpiringSoon()` compares `batchExpiry (7775744000) <= Date.now() (~1.77e12)` → `true` → returns `false` ("already expired")
+
+So every VTXO on regtest/mutinynet is considered "already expired" by `isVtxoExpiringSoon()` and silently excluded from renewal.
+
+**The guard exists in `isExpired()` but is missing from `isVtxoExpiringSoon()`:**
+
+`wallet/index.js` lines 12-25 — `isExpired()` HAS the guard:
+```js
+export function isExpired(vtxo) {
+    if (vtxo.virtualStatus.state === "swept")
+        return true;
+    const expiry = vtxo.virtualStatus.batchExpiry;
+    if (!expiry)
+        return false;
+    // we use this as a workaround to avoid issue on regtest where expiry date is expressed
+    // in blockheight instead of timestamp
+    // if expiry, as Date, is before 2025, then we admit it's too small to be a timestamp
+    // TODO: API should return the expiry unit
+    const expireAt = new Date(expiry);
+    if (expireAt.getFullYear() < 2025)       // ← GUARD: block heights produce dates before 2025
+        return false;
+    return expiry <= Date.now();
+}
+```
+
+`wallet/vtxo-manager.js` lines 85-95 — `isVtxoExpiringSoon()` is MISSING the guard:
+```js
+export function isVtxoExpiringSoon(vtxo, thresholdMs) {
+    const realThresholdMs = thresholdMs <= 100 ? DEFAULT_THRESHOLD_MS : thresholdMs;
+    const { batchExpiry } = vtxo.virtualStatus;
+    if (!batchExpiry)
+        return false;
+    const now = Date.now();
+    if (batchExpiry <= now)
+        return false;                         // ← NO GUARD: block heights are always <= Date.now()
+    return batchExpiry - now <= realThresholdMs;
+}
+```
+
+**Impact:**
+On regtest/mutinynet, `VtxoManager.getExpiringVtxos()` always returns an empty array. This means `VtxoManager.renewVtxos()` always throws "No VTXOs available to renew". Automated renewal is completely broken on these networks.
+
+This also affects `getExpiringAndRecoverableVtxos()` (vtxo-manager.js line 105) which uses `isVtxoExpiringSoon()` as one of its filter conditions.
+
+**Workaround:**
+In our refresh agent, we plan to detect block-height-based `batchExpiry` values (any value < 1e12) and convert them to estimated wall-clock times using `currentBlockHeight + avgBlockInterval` from the esplora API before comparing against thresholds. See `src/agent/expiry.ts` in the Golem codebase.
+
+**Suggested fix:**
+Add the same year-2025 heuristic guard to `isVtxoExpiringSoon()`:
+
+```js
+export function isVtxoExpiringSoon(vtxo, thresholdMs) {
+    const realThresholdMs = thresholdMs <= 100 ? DEFAULT_THRESHOLD_MS : thresholdMs;
+    const { batchExpiry } = vtxo.virtualStatus;
+    if (!batchExpiry)
+        return false;
+    // Same guard as isExpired(): block heights on regtest produce dates before 2025
+    const expireAt = new Date(batchExpiry);
+    if (expireAt.getFullYear() < 2025)
+        return false;
+    const now = Date.now();
+    if (batchExpiry <= now)
+        return false;
+    return batchExpiry - now <= realThresholdMs;
+}
+```
+
+Longer term, the API should return the expiry unit explicitly (as noted by the existing TODO in `isExpired()`), or the indexer should detect block heights and either skip the `* 1000` conversion or convert them to real timestamps using the network's block interval.
