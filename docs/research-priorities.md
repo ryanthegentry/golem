@@ -7,19 +7,19 @@ Questions and investigations identified during red team review that must be reso
 ## P0: Must Answer Before Writing Significant Code
 
 ### 1. Delegation Primitive Scope and Semantics
-**Status:** Unresolved
+**Status:** RESOLVED (Feb 25, 2026)
 **Source:** Red Team C1, M1, S2
 **Question:** What exactly can be delegated in the Ark protocol? Can delegation be constrained to "refresh to same owner" (preventing a compromised agent from redirecting funds)? What credential does the delegate receive, and can it be revoked?
-**Why critical:** The entire security model depends on this. If delegation is broad (can refresh to arbitrary destinations), the "compromised agent can't steal funds" claim is false. If delegation is narrow (refresh to same owner only), the security model holds.
-**Action:** Read Ark Labs SDK source code. Test delegation on testnet. If unclear, ask Tiero directly.
-**Updates security model:** Yes — the security model table in Project Instructions must be updated once this is answered.
+**Resolution:** Tiero (Ark Labs) confirmed that delegation is constrained to "refresh to same owner" by protocol design. The owner pre-signs a transaction to themselves; the delegate cannot change the output destination. A compromised agent can only cause denial of service (failing to refresh), NOT fund theft. Collusion risk (delegate + operator) is mitigated by 1-of-N delegation supporting up to 10 delegates — not needed for PoC but available for production.
+**Impact:** Security model holds as designed. Agent compromise = DoS only.
 
 ### 2. Arkade SDK Signer Abstraction
-**Status:** Unresolved
+**Status:** Partially answered
 **Source:** Initiation Prompt Step 2
 **Question:** Does the Ark Labs Wallet SDK already have a signer interface/abstraction? Does it support external signers? How does it handle PSBT construction?
 **Why critical:** If the SDK has its own signer interface, `GolemSigner` should wrap it rather than replace it. If the SDK assumes embedded keys, we need to design the separation layer.
-**Action:** `git clone` the SDK repo, read the signing-related source files, document findings.
+**Partial findings:** SDK uses an Identity-based pattern (`SingleKey`, `MnemonicIdentity`, `SeedIdentity`). Signing is internal to Identity objects. GolemSigner is defined as our own interface; a `GolemIdentity` bridge will wrap GolemSigner to satisfy the SDK's Identity interface.
+**Action:** Clone SDK source and verify the exact Identity interface during Step 1 integration.
 
 ### 3. Boltz + Arkade Testnet Integration
 **Status:** Partially resolved — `@arkade-os/boltz-swap` exists
@@ -107,3 +107,4 @@ Questions and investigations identified during red team review that must be reso
 | Competitive moat vs. Ark Labs? | Open-source + free tier + premium services. Ark Labs wants third parties to build on Arkade. |
 | Multi-ASP timeline? | Phase 3. Acceptable single-ASP risk in Phase 1-2. |
 | OOR exposure limits? | 10% of total balance or 0.01 BTC, whichever is larger. Configurable. |
+| Delegation scope (P0 #1)? | Refresh-to-same-owner by design. Compromised agent = DoS only. Confirmed by Tiero (Feb 25, 2026). |
