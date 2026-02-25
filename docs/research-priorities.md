@@ -90,6 +90,23 @@ Questions and investigations identified during red team review that must be reso
 
 ---
 
+## Validated via Live Testnet (Feb 25, 2026)
+
+All P0 items resolved with live validation on mutinynet. End-to-end test: faucet → on-chain receive → board into Ark → OOR send 21,000 sats to Tiero (Ark Labs CEO) → balance update → transaction history.
+
+| Capability | Status | Notes |
+|---|---|---|
+| On-chain boarding | Confirmed | Faucet → boarding address → `wallet.onboard()` → settled VTXO |
+| OOR send | Confirmed | 21,000 sats sent to Tiero's Ark address, OOR limit enforced |
+| Refresh agent monitoring | Confirmed | Polling every 60s, expiry check, consolidation skip logic |
+| VTXO consolidation skip | Confirmed | Agent correctly skips consolidation when not needed |
+| Transaction history | Confirmed | Sent/received transactions display with correct types and amounts |
+| PWA on iPhone | Confirmed | Hono server on atlas behind Tailscale, Add to Home Screen works |
+| GolemIdentity bridge | Confirmed | PSBT round-trip signing via MockSigner → GolemIdentity → SDK |
+| EventSource polyfill | Confirmed | Required before SDK imports; crashes without it |
+
+---
+
 ## Resolved During Red Team Process
 
 | Question | Resolution |

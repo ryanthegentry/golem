@@ -30,17 +30,36 @@ NEVER in agent memory      Holds delegation cred      Round history
 
 Solo builder. Working testnet wallet with automated refresh for Ark Labs demo.
 
+### Live Testnet Validation (Feb 25, 2026)
+
+End-to-end test completed on mutinynet: faucet → on-chain receive → board into Ark → OOR send 21,000 sats to Tiero (Ark Labs CEO). First third-party agent-managed Ark wallet transaction.
+
+**Server startup:** `GOLEM_SIGNER_KEY=<hex> npm start`
+**Ryan's testnet key:** `e0f60aacd061005ae3e59d0540af2caafbcb895212c180c2c1b8813a49d61d1e`
+**Tests:** 66 passing, zero TypeScript errors
+**SDK bugs filed:** arkade-os/ts-sdk#310, #311, #312
+
 ### Task Priority
-1. `GolemSigner` interface + `MockSigner`
-2. Research: Ark SDK delegation primitive (see docs/research-priorities.md #1)
-3. Research: `@arkade-os/boltz-swap` testnet integration
-4. Testnet wallet creation + boarding via MockSigner
-5. VTXO monitoring + refresh agent with dynamic safety margins
-6. VTXO consolidation during refresh rounds
-7. OOR settlement + exposure limits (10% balance or 0.01 BTC, whichever larger)
-8. Safe harbor address setup + emergency exit flow
-9. Wallet UI (minimal — balance, txs, agent status. NOT a developer dashboard)
-10. Railway template with /setup wizard
+
+| Step | Task | Status |
+|------|------|--------|
+| 1 | `GolemSigner` interface + `MockSigner` | DONE |
+| 2 | Research: Ark SDK delegation primitive | DONE (P0 resolved) |
+| 3 | Research: `@arkade-os/boltz-swap` testnet | DONE (P0 resolved) |
+| 4 | Testnet wallet creation + boarding | DONE |
+| 5 | VTXO monitoring + refresh agent | DONE |
+| 6 | VTXO consolidation during refresh rounds | DONE |
+| 7 | OOR settlement + exposure limits | DONE |
+| 8 | Safe harbor address setup + emergency exit | TODO |
+| 9 | Wallet UI (PWA + API server) | DONE |
+| 10 | Railway template with /setup wizard | TODO |
+
+### Next Priorities
+1. Transaction detail view (expand row → full txid, timestamp, type, status)
+2. Copy button fix (Clipboard API requires HTTPS; add fallback for HTTP)
+3. Richer agent status display (VTXO count, nearest expiry in UI card)
+4. Safe harbor address registration (Step 8)
+5. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
 
 ### Signer Interface (Define First)
 
@@ -70,6 +89,10 @@ MockSigner holds keys in memory behind this interface. Production swaps in Tapsi
 - All agent actions logged with timestamps
 - No key material in logs, env vars, or error messages
 - Test on Ark mutinynet testnet
+
+## Design System
+For all UI and frontend work, read docs/DESIGN.md before generating code.
+Brand assets in assets/brand/
 
 ## Reference Docs
 
