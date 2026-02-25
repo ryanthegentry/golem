@@ -75,9 +75,12 @@ export class GolemWallet {
     return this.signer.getPublicKey();
   }
 
-  /** Check for VTXOs expiring soon */
-  async getExpiringVtxos(): Promise<ExtendedVirtualCoin[]> {
-    return this.vtxoManager.getExpiringVtxos();
+  /**
+   * Check for VTXOs expiring soon.
+   * @param thresholdMs — ms before expiry to consider "expiring". Defaults to SDK's 3-day threshold.
+   */
+  async getExpiringVtxos(thresholdMs?: number): Promise<ExtendedVirtualCoin[]> {
+    return this.vtxoManager.getExpiringVtxos(thresholdMs);
   }
 
   /** Renew expiring VTXOs to prevent loss */
