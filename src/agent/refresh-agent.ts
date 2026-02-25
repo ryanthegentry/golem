@@ -3,7 +3,29 @@ import type { GolemWallet } from '../wallet/golem-wallet.js';
 export interface RefreshAgentConfig {
   /** How often to check for expiring VTXOs (ms). Default: 60_000 (1 min) */
   pollIntervalMs: number;
-  /** Refresh VTXOs when this much time remains before expiry (ms). Default: 3 days */
+  /**
+   * Refresh VTXOs when this much time remains before expiry (ms). Default: 3 days.
+   *
+   * This is passed through to the SDK's VtxoManager.getExpiringVtxos() as thresholdMs.
+   * The SDK compares it against (batchExpiry - Date.now()) where batchExpiry is stored
+   * in milliseconds.
+   *
+   * IMPORTANT — batchExpiry semantics vary by network:
+   *   - Mainnet/liquid: batchExpiry = Unix ms (server returns expiresAt in seconds,
+   *     SDK indexer multiplies by 1000).
+   *   - Regtest/mutinynet: the server may return raw block heights instead of timestamps
+   *     for expiresAt. The SDK has a heuristic workaround in isExpired() that treats
+   *     values before year 2025 as block heights and ignores them. The isVtxoExpiringSoon()
+   *     function does NOT have this guard — it will compare block heights against Date.now()
+   *     and produce nonsensical results.
+   *
+   * TODO (Step 6): When building dynamic safety margins, we need to:
+   *   1. Detect whether batchExpiry is a timestamp or block height (check if < 1e12)
+   *   2. For block heights: convert to estimated wall-clock time using
+   *      currentBlockHeight + avgBlockInterval from the esplora API
+   *   3. Consider the SDK's own isExpired() heuristic (year < 2025 = block height)
+   *   See src/agent/expiry.ts for the conversion stub.
+   */
   safetyMarginMs: number;
 }
 
@@ -65,7 +87,7 @@ export class RefreshAgent {
   /** Run a single check-and-refresh cycle (public for testing) */
   async tick(): Promise<void> {
     try {
-      const expiring = await this.wallet.getExpiringVtxos();
+      const expiring = await this.wallet.getExpiringVtxos(this.config.safetyMarginMs);
 
       this.emit({
         type: 'check',
