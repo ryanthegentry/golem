@@ -16,6 +16,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@arkade-os/boltz-swap": "^0.2.20",
     "@arkade-os/sdk": "^0.3.13",
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
