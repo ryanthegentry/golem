@@ -1,0 +1,482 @@
+:root {
+  /* Primary — Bitcoin amber, used sparingly for emphasis and CTAs */
+  --color-primary: #F7931A;
+  --color-primary-light: #FFB347;
+  --color-primary-dark: #CC7A15;
+
+  /* Neutrals — The dominant palette. Dark, warm, grounded. */
+  --color-bg-primary: #0D0D0D;
+  --color-bg-secondary: #1A1A1A;
+  --color-bg-elevated: #242424;
+  --color-bg-surface: #2E2E2E;
+
+  /* Text */
+  --color-text-primary: #E8E4DF;
+  --color-text-secondary: #9B9590;
+  --color-text-muted: #6B6560;
+
+  /* Accent — Clay/terracotta from the golem itself */
+  --color-clay: #A0785A;
+  --color-clay-light: #C4A882;
+  --color-clay-dark: #7A5C42;
+
+  /* Semantic */
+  --color-success: #4CAF50;
+  --color-warning: #F7931A;
+  --color-danger: #D32F2F;
+  --color-info: #5C8A9B;
+
+  /* Borders and dividers */
+  --color-border: #333333;
+  --color-border-subtle: #2A2A2A;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: 'DM Sans', 'IBM Plex Sans', sans-serif;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+#app {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 0 16px;
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+/* --- Header --- */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  padding-top: max(16px, env(safe-area-inset-top));
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-logo {
+  font-size: 24px;
+  color: var(--color-primary);
+  line-height: 1;
+}
+
+.header-wordmark {
+  font-family: 'Cabinet Grotesk', 'DM Sans', sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+}
+
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.status-dot-sm {
+  width: 6px;
+  height: 6px;
+}
+
+.status-dot.online {
+  background-color: var(--color-success);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-dot.refreshing {
+  background-color: var(--color-warning);
+}
+
+.status-dot.error {
+  background-color: var(--color-danger);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.status-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* --- Balance Hero --- */
+
+.balance-hero {
+  text-align: center;
+  padding: 32px 0 24px;
+}
+
+.balance-btc {
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 36px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.balance-label {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.balance-sats {
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 14px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+/* --- Action Buttons --- */
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.btn {
+  flex: 1;
+  padding: 14px 20px;
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn:active {
+  opacity: 0.8;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--color-primary);
+  color: var(--color-bg-primary);
+}
+
+.btn-secondary {
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+
+.btn-full {
+  width: 100%;
+  flex: none;
+}
+
+/* --- Agent Card --- */
+
+.agent-card {
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 24px;
+}
+
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.agent-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.agent-card-detail {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* --- Transactions --- */
+
+.tx-section {
+  margin-bottom: 24px;
+}
+
+.tx-section-title {
+  font-family: 'Cabinet Grotesk', 'DM Sans', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+  letter-spacing: 0.02em;
+}
+
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tx-empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  padding: 32px 0;
+}
+
+.tx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 8px;
+}
+
+.tx-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tx-type {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.tx-type.sent { color: var(--color-text-primary); }
+.tx-type.received { color: var(--color-success); }
+
+.tx-date {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.tx-item-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.tx-amount {
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.tx-amount.sent { color: var(--color-text-primary); }
+.tx-amount.received { color: var(--color-success); }
+
+.tx-settled {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* --- Modals --- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.modal.active {
+  display: flex;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-content {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  background-color: var(--color-bg-secondary);
+  border-radius: 16px 16px 0 0;
+  padding: 24px 20px;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.modal-title {
+  font-family: 'Cabinet Grotesk', 'DM Sans', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+/* --- Forms --- */
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 12px 14px;
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--color-primary);
+}
+
+.form-input.mono {
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.oor-limit {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.send-error {
+  color: var(--color-danger);
+  font-size: 13px;
+  margin-bottom: 12px;
+  min-height: 0;
+}
+
+.send-success {
+  color: var(--color-success);
+  font-size: 13px;
+  margin-top: 12px;
+  word-break: break-all;
+}
+
+/* --- Receive --- */
+
+.receive-section {
+  margin-bottom: 20px;
+}
+
+.address-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+}
+
+.address-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.btn-copy {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.btn-copy:active {
+  opacity: 0.7;
+}
+
+/* --- Mono utility --- */
+
+.mono {
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+}
