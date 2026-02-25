@@ -1,6 +1,6 @@
-import { Wallet, VtxoManager } from '@arkade-os/sdk';
+import { Wallet, VtxoManager, Ramps } from '@arkade-os/sdk';
 import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
-import type { WalletBalance, ExtendedVirtualCoin } from '@arkade-os/sdk';
+import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent } from '@arkade-os/sdk';
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
 import type { GolemWalletConfig } from './config.js';
@@ -81,7 +81,35 @@ export class GolemWallet {
   }
 
   /** Renew expiring VTXOs to prevent loss */
-  async renewVtxos(): Promise<string> {
-    return this.vtxoManager.renewVtxos();
+  async renewVtxos(
+    eventCallback?: (event: SettlementEvent) => void,
+  ): Promise<string> {
+    return this.vtxoManager.renewVtxos(eventCallback);
+  }
+
+  /** Get boarding UTXOs (on-chain funds waiting to enter Ark) */
+  async getBoardingUtxos(): Promise<ExtendedCoin[]> {
+    return this.sdkWallet.getBoardingUtxos();
+  }
+
+  /**
+   * Board on-chain funds into Ark VTXOs.
+   * Boarding UTXOs must exist at the boarding address first.
+   */
+  async onboard(
+    eventCallback?: (event: SettlementEvent) => void,
+  ): Promise<string> {
+    const info = await this.sdkWallet.arkProvider.getInfo();
+    return new Ramps(this.sdkWallet).onboard(info.fees, undefined, undefined, eventCallback);
+  }
+
+  /**
+   * Settle with full control — specify inputs and outputs.
+   */
+  async settle(
+    params?: { inputs: ExtendedCoin[]; outputs: { address: string; amount: bigint }[] },
+    eventCallback?: (event: SettlementEvent) => void,
+  ): Promise<string> {
+    return this.sdkWallet.settle(params, eventCallback);
   }
 }
