@@ -4,6 +4,7 @@ import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent 
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
 import type { GolemWalletConfig } from './config.js';
+import { OorLimitExceededError } from './errors.js';
 
 /**
  * Golem wallet — wraps the Ark SDK Wallet with GolemIdentity.
@@ -13,12 +14,19 @@ import type { GolemWalletConfig } from './config.js';
  * touches private key material.
  */
 export class GolemWallet {
+  private readonly oorLimitFraction: number;
+  private readonly oorLimitMinSats: number;
+
   private constructor(
     private readonly signer: GolemSigner,
     private readonly identity: GolemIdentity,
     readonly sdkWallet: Wallet,
     readonly vtxoManager: VtxoManager,
-  ) {}
+    config: GolemWalletConfig,
+  ) {
+    this.oorLimitFraction = config.oorLimitFraction;
+    this.oorLimitMinSats = config.oorLimitMinSats;
+  }
 
   /**
    * Create a new GolemWallet connected to an Ark server.
@@ -45,7 +53,7 @@ export class GolemWallet {
       enabled: true,
     });
 
-    return new GolemWallet(signer, identity, sdkWallet, vtxoManager);
+    return new GolemWallet(signer, identity, sdkWallet, vtxoManager, config);
   }
 
   /** Ark protocol address for receiving off-chain payments */
@@ -128,5 +136,33 @@ export class GolemWallet {
     const address = await this.getAddress();
     const total = vtxos.reduce((sum, v) => sum + BigInt(v.value), 0n);
     return this.settle({ inputs: vtxos, outputs: [{ address, amount: total }] }, eventCallback);
+  }
+
+  /**
+   * Send bitcoin to an Ark address with OOR exposure limit enforcement.
+   * The SDK handles OOR mechanics (preconfirm → settle at next round) internally.
+   */
+  async sendBitcoin(params: { address: string; amount: number }): Promise<string> {
+    await this.enforceOorLimit(params.amount);
+    return this.sdkWallet.sendBitcoin(params);
+  }
+
+  /**
+   * Check that a send amount doesn't exceed OOR exposure limits.
+   *
+   * TODO: This checks individual send size, not cumulative unsettled OOR exposure.
+   * The architecture doc specifies "maximum OOR balance" — meaning total unsettled
+   * OOR across multiple sends. E.g. three 5% sends should trigger the 10% limit.
+   * Per-send check is correct for PoC. A later phase should track cumulative OOR
+   * balance by summing preconfirmed VTXOs that haven't settled into a round yet.
+   */
+  private async enforceOorLimit(amountSats: number): Promise<void> {
+    const balance = await this.getBalance();
+    const percentLimit = Math.floor(balance.total * this.oorLimitFraction);
+    const maxOor = Math.max(percentLimit, this.oorLimitMinSats);
+
+    if (amountSats > maxOor) {
+      throw new OorLimitExceededError(amountSats, maxOor, balance.total);
+    }
   }
 }
