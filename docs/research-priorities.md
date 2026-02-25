@@ -14,12 +14,10 @@ Questions and investigations identified during red team review that must be reso
 **Impact:** Security model holds as designed. Agent compromise = DoS only.
 
 ### 2. Arkade SDK Signer Abstraction
-**Status:** Partially answered
+**Status:** RESOLVED (Feb 25, 2026)
 **Source:** Initiation Prompt Step 2
 **Question:** Does the Ark Labs Wallet SDK already have a signer interface/abstraction? Does it support external signers? How does it handle PSBT construction?
-**Why critical:** If the SDK has its own signer interface, `GolemSigner` should wrap it rather than replace it. If the SDK assumes embedded keys, we need to design the separation layer.
-**Partial findings:** SDK uses an Identity-based pattern (`SingleKey`, `MnemonicIdentity`, `SeedIdentity`). Signing is internal to Identity objects. GolemSigner is defined as our own interface; a `GolemIdentity` bridge will wrap GolemSigner to satisfy the SDK's Identity interface.
-**Action:** Clone SDK source and verify the exact Identity interface during Step 1 integration.
+**Resolution:** Full analysis in `docs/sdk-identity-analysis.md`. SDK uses an `Identity` interface with three methods: `sign(tx)`, `signMessage(msg, type)`, and `signerSession()`. Existing implementations (`SingleKey`, `SeedIdentity`) call `tx.sign(privateKey)` internally — requiring raw key access. GolemIdentity bridge will use PSBT extraction (`tx.toPSBT()` → GolemSigner → `Transaction.fromPSBT()`) to avoid exposing keys. `signMessage()` added to GolemSigner interface. MuSig2 signer sessions use ephemeral random keys (independent of wallet key), so `TreeSignerSession.random()` is fine.
 
 ### 3. Boltz + Arkade Testnet Integration
 **Status:** Partially resolved — `@arkade-os/boltz-swap` exists
@@ -108,3 +106,4 @@ Questions and investigations identified during red team review that must be reso
 | Multi-ASP timeline? | Phase 3. Acceptable single-ASP risk in Phase 1-2. |
 | OOR exposure limits? | 10% of total balance or 0.01 BTC, whichever is larger. Configurable. |
 | Delegation scope (P0 #1)? | Refresh-to-same-owner by design. Compromised agent = DoS only. Confirmed by Tiero (Feb 25, 2026). |
+| SDK signer abstraction (P0 #2)? | SDK uses Identity interface. GolemIdentity bridge wraps GolemSigner via PSBT extraction. See `docs/sdk-identity-analysis.md`. |

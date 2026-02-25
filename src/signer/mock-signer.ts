@@ -1,6 +1,7 @@
-import { getPublicKey, schnorr, utils } from '@noble/secp256k1';
+import { getPublicKey, schnorr, signAsync, utils } from '@noble/secp256k1';
 import type {
   GolemSigner,
+  SignatureType,
   SignerInfo,
   SignerStatus,
   SignedTransaction,
@@ -72,6 +73,16 @@ export class MockSigner implements GolemSigner {
     signed.set(signature);
     signed.set(unsignedTx.psbt, signature.length);
     return { psbt: signed };
+  }
+
+  async signMessage(message: Uint8Array, type: SignatureType): Promise<Uint8Array> {
+    if (!message || message.length === 0) {
+      throw new Error('MockSigner: empty message');
+    }
+    if (type === 'ecdsa') {
+      return signAsync(message, this.#secretKey, { prehash: false });
+    }
+    return schnorr.signAsync(message, this.#secretKey);
   }
 
   async ping(): Promise<SignerStatus> {

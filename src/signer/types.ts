@@ -51,12 +51,18 @@ export interface SignedTransaction {
   psbt: Uint8Array;
 }
 
+export type SignatureType = 'schnorr' | 'ecdsa';
+
 /**
  * Core signer interface. All signing in Golem goes through this.
  *
  * Agent NEVER holds master private keys. MockSigner holds keys in memory
  * behind this interface for testnet/PoC use. Production implementations
  * (TapsignerSigner, ColdcardSigner, etc.) swap in behind the same boundary.
+ *
+ * The SDK's Identity interface requires both transaction signing (PSBT-based)
+ * and raw message signing (for intents and delegation proofs). Both are
+ * represented here.
  */
 export interface GolemSigner {
   getSignerInfo(): Promise<SignerInfo>;
@@ -64,7 +70,14 @@ export interface GolemSigner {
   /** Returns 33-byte compressed secp256k1 public key */
   getPublicKey(): Promise<Uint8Array>;
 
+  /** Sign a PSBT. Returns signed PSBT bytes. */
   signTransaction(unsignedTx: UnsignedTransaction): Promise<SignedTransaction>;
+
+  /**
+   * Sign a raw message (for intents, delegation proofs, etc.).
+   * Required by the Ark SDK Identity.signMessage() interface.
+   */
+  signMessage(message: Uint8Array, type: SignatureType): Promise<Uint8Array>;
 
   /** Optional — not all signers support delegation */
   getDelegationCredential?(): Promise<DelegationCredential>;

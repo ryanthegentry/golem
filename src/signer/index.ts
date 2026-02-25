@@ -3,6 +3,7 @@ export type {
   SignerInfo,
   SignerStatus,
   SignerType,
+  SignatureType,
   DelegationCredential,
   UnsignedTransaction,
   SignedTransaction,
