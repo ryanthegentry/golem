@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { schnorr, etc } from '@noble/secp256k1';
+import { schnorr, verifyAsync, etc } from '@noble/secp256k1';
 import { MockSigner } from './mock-signer.js';
 
 describe('MockSigner', () => {
@@ -102,6 +102,40 @@ describe('MockSigner', () => {
     expect(str).not.toContain(secretHex);
     const json = JSON.stringify(signer);
     expect(json).not.toContain(secretHex);
+  });
+
+  it('signMessage with schnorr produces verifiable signature', async () => {
+    const signer = MockSigner.create();
+    const pubkey = await signer.getPublicKey();
+    const message = new TextEncoder().encode('test message');
+    const sig = await signer.signMessage(message, 'schnorr');
+
+    expect(sig).toBeInstanceOf(Uint8Array);
+    expect(sig.length).toBe(64);
+
+    const xOnlyPubkey = pubkey.slice(1);
+    const valid = await schnorr.verifyAsync(sig, message, xOnlyPubkey);
+    expect(valid).toBe(true);
+  });
+
+  it('signMessage with ecdsa produces verifiable signature', async () => {
+    const signer = MockSigner.create();
+    const pubkey = await signer.getPublicKey();
+    const message = new Uint8Array(32); // pre-hashed 32-byte message
+    message[0] = 0xab;
+    const sig = await signer.signMessage(message, 'ecdsa');
+
+    expect(sig).toBeInstanceOf(Uint8Array);
+    expect(sig.length).toBe(64); // compact ECDSA sig
+
+    const valid = await verifyAsync(sig, message, pubkey, { prehash: false });
+    expect(valid).toBe(true);
+  });
+
+  it('signMessage rejects empty message', async () => {
+    const signer = MockSigner.create();
+    await expect(signer.signMessage(new Uint8Array(0), 'schnorr'))
+      .rejects.toThrow('empty message');
   });
 
   it('two signers produce different keys', async () => {

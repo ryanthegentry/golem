@@ -78,3 +78,4 @@ Read these when you need deeper context:
 - `docs/ark-reference.md` — Ark protocol specifics, VTXO lifecycle, rounds, fees, Boltz integration
 - `docs/research-priorities.md` — Open questions ordered by criticality
 - `docs/vision.md` — Long-term product direction (neobank aspirations, team, market)
+- `docs/sdk-identity-analysis.md` — Ark SDK Identity interface analysis, GolemIdentity bridge design
