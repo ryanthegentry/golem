@@ -115,4 +115,18 @@ export class GolemWallet {
   ): Promise<string> {
     return this.sdkWallet.settle(params, eventCallback);
   }
+
+  /**
+   * Consolidate multiple VTXOs into a single output.
+   * Sends the total value back to self. The Ark server deducts fees
+   * from the output during the settlement round.
+   */
+  async consolidateVtxos(
+    vtxos: ExtendedVirtualCoin[],
+    eventCallback?: (event: SettlementEvent) => void,
+  ): Promise<string> {
+    const address = await this.getAddress();
+    const total = vtxos.reduce((sum, v) => sum + BigInt(v.value), 0n);
+    return this.settle({ inputs: vtxos, outputs: [{ address, amount: total }] }, eventCallback);
+  }
 }
