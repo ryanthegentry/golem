@@ -1,6 +1,31 @@
 import { describe, it, expect } from 'vitest';
 import { schnorr, verifyAsync, etc } from '@noble/secp256k1';
+import { pubSchnorr } from '@scure/btc-signer/utils.js';
+import { Transaction, p2tr } from '@scure/btc-signer';
+import { hex } from '@scure/base';
 import { MockSigner } from './mock-signer.js';
+
+/** Create a minimal P2TR PSBT that can be signed by the given key */
+function createTestPsbt(compressedPubkey: Uint8Array): Uint8Array {
+  const xOnlyPubkey = compressedPubkey.slice(1);
+  const payment = p2tr(xOnlyPubkey);
+  const tx = new Transaction({
+    allowUnknown: true,
+    allowUnknownOutputs: true,
+    allowUnknownInputs: true,
+  });
+  tx.addInput({
+    txid: '0000000000000000000000000000000000000000000000000000000000000001',
+    index: 0,
+    witnessUtxo: {
+      script: payment.script,
+      amount: 100_000n,
+    },
+    tapInternalKey: xOnlyPubkey,
+  });
+  tx.addOutputAddress('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 50_000n);
+  return tx.toPSBT();
+}
 
 describe('MockSigner', () => {
   it('creates a valid instance', () => {
@@ -39,27 +64,82 @@ describe('MockSigner', () => {
     expect(() => MockSigner.fromSecretKey(zeros)).toThrow('invalid secret key');
   });
 
-  it('signTransaction produces a verifiable Schnorr signature', async () => {
+  it('signTransaction signs a P2TR PSBT', async () => {
     const signer = MockSigner.create();
     const pubkey = await signer.getPublicKey();
-    const message = new TextEncoder().encode('test transaction data');
-    const result = await signer.signTransaction({ psbt: message });
+    const psbt = createTestPsbt(pubkey);
+
+    const result = await signer.signTransaction({ psbt });
 
     expect(result.psbt).toBeInstanceOf(Uint8Array);
-    // Schnorr sig is 64 bytes, so result = 64 + message.length
-    expect(result.psbt.length).toBe(64 + message.length);
+    // Signed PSBT should be different from unsigned (witness data added)
+    expect(result.psbt.length).toBeGreaterThan(psbt.length);
 
-    // Extract signature and verify against Schnorr x-only pubkey (bytes 1..33)
-    const sig = result.psbt.slice(0, 64);
-    const xOnlyPubkey = pubkey.slice(1); // strip prefix byte for BIP340
-    const valid = await schnorr.verifyAsync(sig, message, xOnlyPubkey);
-    expect(valid).toBe(true);
+    // Verify it can be parsed back and has a signature
+    const signedTx = Transaction.fromPSBT(result.psbt, {
+      allowUnknown: true,
+      allowUnknownOutputs: true,
+      allowUnknownInputs: true,
+    });
+    const input = signedTx.getInput(0);
+    expect(input.tapKeySig).toBeTruthy();
+    expect(input.tapKeySig!.length).toBe(64); // Schnorr sig
+  });
+
+  it('signTransaction with inputIndexes signs only specified inputs', async () => {
+    const signer = MockSigner.create();
+    const pubkey = await signer.getPublicKey();
+    const psbt = createTestPsbt(pubkey);
+
+    const result = await signer.signTransaction({ psbt, inputIndexes: [0] });
+
+    const signedTx = Transaction.fromPSBT(result.psbt, {
+      allowUnknown: true,
+      allowUnknownOutputs: true,
+      allowUnknownInputs: true,
+    });
+    const input = signedTx.getInput(0);
+    expect(input.tapKeySig).toBeTruthy();
   });
 
   it('signTransaction rejects empty data', async () => {
     const signer = MockSigner.create();
     await expect(signer.signTransaction({ psbt: new Uint8Array(0) }))
       .rejects.toThrow('empty transaction data');
+  });
+
+  it('signMessage with schnorr produces verifiable signature', async () => {
+    const signer = MockSigner.create();
+    const pubkey = await signer.getPublicKey();
+    const message = new TextEncoder().encode('test message');
+    const sig = await signer.signMessage(message, 'schnorr');
+
+    expect(sig).toBeInstanceOf(Uint8Array);
+    expect(sig.length).toBe(64);
+
+    const xOnlyPubkey = pubkey.slice(1);
+    const valid = await schnorr.verifyAsync(sig, message, xOnlyPubkey);
+    expect(valid).toBe(true);
+  });
+
+  it('signMessage with ecdsa produces verifiable signature', async () => {
+    const signer = MockSigner.create();
+    const pubkey = await signer.getPublicKey();
+    const message = new Uint8Array(32); // pre-hashed 32-byte message
+    message[0] = 0xab;
+    const sig = await signer.signMessage(message, 'ecdsa');
+
+    expect(sig).toBeInstanceOf(Uint8Array);
+    expect(sig.length).toBe(64); // compact ECDSA sig
+
+    const valid = await verifyAsync(sig, message, pubkey, { prehash: false });
+    expect(valid).toBe(true);
+  });
+
+  it('signMessage rejects empty message', async () => {
+    const signer = MockSigner.create();
+    await expect(signer.signMessage(new Uint8Array(0), 'schnorr'))
+      .rejects.toThrow('empty message');
   });
 
   it('ping reports available', async () => {
@@ -102,40 +182,6 @@ describe('MockSigner', () => {
     expect(str).not.toContain(secretHex);
     const json = JSON.stringify(signer);
     expect(json).not.toContain(secretHex);
-  });
-
-  it('signMessage with schnorr produces verifiable signature', async () => {
-    const signer = MockSigner.create();
-    const pubkey = await signer.getPublicKey();
-    const message = new TextEncoder().encode('test message');
-    const sig = await signer.signMessage(message, 'schnorr');
-
-    expect(sig).toBeInstanceOf(Uint8Array);
-    expect(sig.length).toBe(64);
-
-    const xOnlyPubkey = pubkey.slice(1);
-    const valid = await schnorr.verifyAsync(sig, message, xOnlyPubkey);
-    expect(valid).toBe(true);
-  });
-
-  it('signMessage with ecdsa produces verifiable signature', async () => {
-    const signer = MockSigner.create();
-    const pubkey = await signer.getPublicKey();
-    const message = new Uint8Array(32); // pre-hashed 32-byte message
-    message[0] = 0xab;
-    const sig = await signer.signMessage(message, 'ecdsa');
-
-    expect(sig).toBeInstanceOf(Uint8Array);
-    expect(sig.length).toBe(64); // compact ECDSA sig
-
-    const valid = await verifyAsync(sig, message, pubkey, { prehash: false });
-    expect(valid).toBe(true);
-  });
-
-  it('signMessage rejects empty message', async () => {
-    const signer = MockSigner.create();
-    await expect(signer.signMessage(new Uint8Array(0), 'schnorr'))
-      .rejects.toThrow('empty message');
   });
 
   it('two signers produce different keys', async () => {

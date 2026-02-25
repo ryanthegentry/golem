@@ -1,3 +1,4 @@
+import { Transaction, SigHash } from '@scure/btc-signer';
 import { getPublicKey, schnorr, signAsync, utils } from '@noble/secp256k1';
 import type {
   GolemSigner,
@@ -7,6 +8,16 @@ import type {
   SignedTransaction,
   UnsignedTransaction,
 } from './types.js';
+
+const ALL_SIGHASH = Object.values(SigHash).filter(
+  (x): x is number => typeof x === 'number',
+);
+
+const PSBT_TX_OPTS = {
+  allowUnknown: true,
+  allowUnknownOutputs: true,
+  allowUnknownInputs: true,
+} as const;
 
 /**
  * In-memory signer for testnet/PoC use.
@@ -56,23 +67,25 @@ export class MockSigner implements GolemSigner {
   }
 
   /**
-   * Signs the PSBT bytes using Schnorr (BIP340).
-   *
-   * In a real implementation this would parse the PSBT, identify inputs,
-   * and sign each one. MockSigner signs the raw bytes as a proof-of-concept.
-   * The actual signing flow will be shaped by Arkade SDK integration.
+   * Parse PSBT, sign matching inputs with the in-memory key, return signed PSBT.
+   * Supports both signing all inputs and signing specific input indexes.
    */
   async signTransaction(unsignedTx: UnsignedTransaction): Promise<SignedTransaction> {
     if (!unsignedTx.psbt || unsignedTx.psbt.length === 0) {
       throw new Error('MockSigner: empty transaction data');
     }
-    const signature = await schnorr.signAsync(unsignedTx.psbt, this.#secretKey);
-    // Return signature concatenated with original PSBT as placeholder format.
-    // Real format will be dictated by Arkade SDK.
-    const signed = new Uint8Array(signature.length + unsignedTx.psbt.length);
-    signed.set(signature);
-    signed.set(unsignedTx.psbt, signature.length);
-    return { psbt: signed };
+
+    const tx = Transaction.fromPSBT(unsignedTx.psbt, PSBT_TX_OPTS);
+
+    if (unsignedTx.inputIndexes) {
+      for (const idx of unsignedTx.inputIndexes) {
+        tx.signIdx(this.#secretKey, idx, ALL_SIGHASH);
+      }
+    } else {
+      tx.sign(this.#secretKey, ALL_SIGHASH);
+    }
+
+    return { psbt: tx.toPSBT() };
   }
 
   async signMessage(message: Uint8Array, type: SignatureType): Promise<Uint8Array> {

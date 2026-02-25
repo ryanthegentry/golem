@@ -1,8 +1,8 @@
 /**
  * Signer types for Golem wallet.
  *
- * Transaction types are thin wrappers — placeholders that define the seam.
- * Real shape will be dictated by the Arkade SDK when we integrate.
+ * Transaction types wrap PSBT bytes. The GolemIdentity bridge converts
+ * between the SDK's Transaction objects and these PSBT wrappers.
  */
 
 export type SignerType = 'mock' | 'mobile' | 'tapsigner' | 'coldcard';
@@ -36,16 +36,18 @@ export interface DelegationCredential {
 }
 
 /**
- * Thin wrapper around unsigned transaction data (PSBT bytes).
- * Placeholder — real format dictated by Arkade SDK.
+ * Unsigned transaction as PSBT bytes, with optional input index hints.
+ * The GolemIdentity bridge populates inputIndexes when the SDK
+ * requests signing of specific inputs.
  */
 export interface UnsignedTransaction {
   psbt: Uint8Array;
+  /** If set, only sign these input indexes. Otherwise sign all matching inputs. */
+  inputIndexes?: number[];
 }
 
 /**
- * Thin wrapper around signed transaction data.
- * Placeholder — real format dictated by Arkade SDK.
+ * Signed transaction as PSBT bytes.
  */
 export interface SignedTransaction {
   psbt: Uint8Array;
