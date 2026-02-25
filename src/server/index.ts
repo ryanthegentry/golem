@@ -103,6 +103,17 @@ app.post('/api/send', async (c) => {
   }
 });
 
+app.post('/api/onboard', async (c) => {
+  try {
+    const txid = await wallet.onboard((event) => {
+      console.log(`[onboard] ${event.type}`);
+    });
+    return c.json({ txid });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
 app.get('/api/agent/status', (c) => {
   return c.json({
     running: agent.isRunning,

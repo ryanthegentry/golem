@@ -59,6 +59,17 @@
     const total = balance.total || 0;
     balanceBtc.textContent = satsToBtc(total);
     balanceSats.textContent = formatSats(total) + ' sats';
+    updateBoardingBanner();
+  }
+
+  function updateBoardingBanner() {
+    var banner = $('#boarding-banner');
+    if (!balance || !balance.boarding || balance.boarding.total <= 0) {
+      banner.style.display = 'none';
+      return;
+    }
+    banner.style.display = 'flex';
+    $('#boarding-detail').textContent = formatSats(balance.boarding.total) + ' sats on-chain';
   }
 
   function updateAgentStatus() {
@@ -262,6 +273,33 @@
       fetchTransactions();
     }
   }
+
+  // --- Onboard ---
+
+  $('#btn-onboard').addEventListener('click', async () => {
+    var btn = $('#btn-onboard');
+    btn.disabled = true;
+    btn.textContent = 'Boarding...';
+
+    try {
+      var res = await fetch('/api/onboard', { method: 'POST' });
+      var data = await res.json();
+
+      if (!res.ok) {
+        btn.textContent = 'Error';
+        setTimeout(function () { btn.textContent = 'Board into Ark'; btn.disabled = false; }, 3000);
+        return;
+      }
+
+      btn.textContent = 'Boarded!';
+      fetchBalance();
+      fetchTransactions();
+      setTimeout(function () { btn.textContent = 'Board into Ark'; btn.disabled = false; }, 3000);
+    } catch (e) {
+      btn.textContent = 'Error';
+      setTimeout(function () { btn.textContent = 'Board into Ark'; btn.disabled = false; }, 3000);
+    }
+  });
 
   // --- Send ---
 
