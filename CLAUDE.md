@@ -54,7 +54,8 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 9 | Wallet UI (PWA + API server) | DONE |
 | 10 | L402 Lightning-gated reverse proxy | DONE |
 | 11 | CLI: init, balance, gateway, stats | DONE |
-| 12 | Railway template with /setup wizard | TODO |
+| 12 | CLI: golem pay (L402 client) | DONE |
+| 13 | Railway template with /setup wizard | TODO |
 
 ### L402 Gateway (Feb 25–26, 2026)
 
@@ -80,16 +81,23 @@ Commander.js CLI with `~/.golem/config.json` persistence. Live-validated end-to-
 - `golem balance` — Show total/available/settled/boarding sats + address.
 - `golem gateway` — L402 reverse proxy. `--upstream` (required), `--price` (required), `--port`, `--free-paths`.
 - `golem stats` — Query running gateway's `/stats` endpoint.
+- `golem pay <url>` — L402 client: auto-pays 402 challenges from Ark wallet via Boltz submarine swap. `--max-price`, `--method`, `--header`.
 
-**Files:** `src/cli/index.ts` (entry), `src/cli/config.ts`, `src/cli/wallet.ts` (shared init), `src/cli/commands/{init,balance,gateway,stats}.ts`, `src/cli/cli.test.ts` (7 tests).
+**Files:** `src/cli/index.ts` (entry), `src/cli/config.ts`, `src/cli/wallet.ts` (shared init), `src/cli/commands/{init,balance,gateway,stats,pay}.ts`, `src/cli/cli.test.ts` (7 tests).
 
 **Usage:** `npm run golem -- <command>` or after build: `npx golem <command>`.
 
+**lnget compatibility:** Protocol flow (402 + WWW-Authenticate header format) is compatible. Macaroon serialization is not — Golem uses JSON-based format, lnget expects libmacaroons v2 binary. Fixable but not a PoC priority.
+
+### Credentials
+
+Voltage LND macaroon is read from `VOLTAGE_MACAROON` env var (base64-encoded). Never hardcode in source files.
+
 ### Next Priorities
-1. Transaction detail view (expand row → full txid, timestamp, type, status)
-2. Copy button fix (Clipboard API requires HTTPS; add fallback for HTTP)
-3. Richer agent status display (VTXO count, nearest expiry in UI card)
-4. Safe harbor address registration (Step 8)
+1. Safe harbor address registration (Step 8)
+2. Railway template with /setup wizard
+3. lnget compatibility (libmacaroons v2 binary serialization)
+4. Transaction detail view (expand row → full txid, timestamp, type, status)
 5. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
 
 ### Signer Interface (Define First)
