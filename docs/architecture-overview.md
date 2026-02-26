@@ -1,7 +1,7 @@
 # Golem Architecture Overview
 
 **Date:** 2026-02-26
-**Milestone:** CLI complete — `golem init`, `golem balance`, `golem gateway`, `golem stats`. 93 tests passing, zero TypeScript errors. Live L402 payment validated end-to-end on mutinynet via Voltage LND → Boltz → Ark.
+**Milestone:** CLI + L402 security hardening complete. 108 tests passing, zero TypeScript errors. Commands: `golem init`, `golem balance`, `golem gateway`, `golem stats`, `golem pay`. L402 gateway with V2 binary macaroons (`macaroon` npm package), per-macaroon root keys, time-before caveats, constant-time preimage verification, IP rate limiting. lnget wire compatibility validated. Live Lightning payment validated end-to-end on mutinynet via Voltage LND → Boltz → Ark.
 
 ---
 
@@ -123,7 +123,9 @@ Client                    Gateway (port 8402)              Upstream API
   │<──────────────────────────│                                │
 ```
 
-The macaroon is HMAC-SHA256 signed by a root key. It embeds the payment hash. When the client provides a preimage that SHA256-hashes to the embedded payment hash, it proves they paid. Zero database lookups. Stateless.
+The macaroon is a V2 binary token (same format as LND/Aperture, via the `macaroon` npm package — official JS port of Go's `go-macaroon/macaroon`). Each macaroon gets its own root key (per-macaroon root keys via `RootKeyStore`). It embeds the payment hash in a 38-byte identifier (version + payment_hash + root_key_id). When the client provides a preimage that SHA256-hashes to the embedded payment hash, it proves they paid. Verification uses `crypto.timingSafeEqual` for constant-time comparison. Time-before caveats prevent replay after TTL expires. Zero database lookups. Stateless (root keys stored in `~/.golem/root-keys.json` with 0600 permissions, separate from config).
+
+**Known limitation:** Between HTLC settlement (preimage revealed) and the Boltz swap completing into the Ark wallet, there's a brief window where the gateway has verified the preimage but the sats haven't arrived as a VTXO. This is a Boltz swap latency issue, not an L402 vulnerability — the preimage proof-of-payment is valid immediately. Same trust model as OOR payments.
 
 ## Layer 6: Golem CLI
 
@@ -139,6 +141,7 @@ Commander.js wrapping everything above:
 - `golem balance` → load config, create wallet from config, query balance
 - `golem gateway` → load config, create wallet, create Lightning provider, start L402 middleware
 - `golem stats` → HTTP GET to running gateway's `/stats` endpoint
+- `golem pay <url>` → L402 client: auto-pays 402 challenges from Ark wallet via Boltz submarine swap
 
 ## The Full Test Flow
 
