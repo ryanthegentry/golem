@@ -1,5 +1,5 @@
 /**
- * golem gateway — Start an L402 Lightning-gated reverse proxy
+ * golem gateway — Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)
  */
 
 import { Command } from 'commander';
@@ -13,13 +13,14 @@ import { MemoryRootKeyStore } from '../../l402/macaroon.js';
 import { MUTINYNET_LIGHTNING_CONFIG } from '../../lightning/config.js';
 
 export const gatewayCommand = new Command('gateway')
-  .description('Start an L402 Lightning-gated reverse proxy')
+  .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
   .requiredOption('--upstream <url>', 'Upstream server URL to proxy to')
   .requiredOption('--price <sats>', 'Price per request in satoshis')
   .option('--port <port>', 'Port to listen on', '8402')
   .option('--currency <currency>', 'Currency for pricing', 'sats')
   .option('--description <text>', 'Description shown in 402 responses')
   .option('--free-paths <paths>', 'Comma-separated paths that skip payment', '/health,/stats')
+  .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
   .action(async (opts) => {
     if (opts.currency && opts.currency !== 'sats') {
       console.error('Error: Only sats currency is supported. USD pricing coming soon.');
@@ -55,11 +56,24 @@ export const gatewayCommand = new Command('gateway')
     await lightning.startSwapManager();
     console.log('SwapManager started');
 
-    // Create L402 gateway
+    // Get Ark address for OOR payments
+    let arkAddress: string | undefined;
+    if (opts.ark !== false) {
+      try {
+        arkAddress = await wallet.getAddress();
+        console.log(`Ark OOR payments enabled: ${arkAddress}`);
+      } catch (err) {
+        console.warn('Could not get Ark address — Ark OOR payments disabled:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Create L402 gateway (dual-mode if Ark address available)
     const gateway = createL402Gateway(lightning, {
       priceSats,
       description: opts.description,
-      freePaths,
+      freePaths: [...freePaths, '/l402/preimage'],
+      arkAddress,
+      wallet: arkAddress ? wallet.sdkWallet : undefined,
     });
 
     // Build Hono app
@@ -70,6 +84,9 @@ export const gatewayCommand = new Command('gateway')
 
     // Free: gateway stats
     app.get('/stats', (c) => c.json(gateway.stats));
+
+    // Free: preimage endpoint (for Ark OOR payment polling)
+    app.get('/l402/preimage', gateway.preimageHandler);
 
     // L402 gate on all other routes
     app.use('/*', gateway.middleware);
@@ -108,13 +125,16 @@ export const gatewayCommand = new Command('gateway')
     // Start server with EADDRINUSE handling
     const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
       console.log('');
-      console.log('L402 gateway running!');
+      console.log(`L402 gateway running! ${arkAddress ? '(dual-mode: Lightning + Ark)' : '(Lightning only)'}`);
       console.log('');
       console.log(`  URL:        http://0.0.0.0:${port}`);
       console.log(`  Upstream:   ${opts.upstream}`);
       console.log(`  Price:      ${priceSats} sats/request`);
       console.log(`  Free paths: ${freePaths.join(', ')}`);
       console.log(`  Network:    ${config.network}`);
+      if (arkAddress) {
+        console.log(`  Ark addr:   ${arkAddress}`);
+      }
       console.log('');
       console.log('Press Ctrl+C to stop.');
     });
@@ -125,5 +145,13 @@ export const gatewayCommand = new Command('gateway')
         process.exit(1);
       }
       throw err;
+    });
+
+    // Clean shutdown
+    process.on('SIGINT', () => {
+      console.log('\nShutting down...');
+      gateway.dispose();
+      server.close();
+      process.exit(0);
     });
   });

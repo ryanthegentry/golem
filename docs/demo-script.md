@@ -309,6 +309,73 @@ npm run golem -- balance
 
 ---
 
+### Act 8: "Pay with Ark — no Lightning at all"
+
+**Talking point:** *"Lightning works great, but it goes through Boltz — swap fees, 5-20 second latency. What if the client also has an Ark wallet? They can pay directly via OOR — off-chain, instant, zero swap fees."*
+
+```bash
+# Pay with Ark OOR — skips Boltz entirely
+npm run golem -- pay --ark http://localhost:8402/v1/aqi
+```
+
+**Expected output:**
+```
+Requesting http://localhost:8402/v1/aqi...
+
+402 Payment Required
+  Price: 1,000 sats
+  Invoice: lntbs10u1...
+  Ark OOR: 1047 sats → tark1q...
+
+Connecting to Ark server...
+Paying via Ark OOR (1047 sats)...
+  OOR sent. Waiting for gateway confirmation...
+  Preimage: a3f8...
+  Payment confirmed in 1.2s (Ark OOR)
+
+Retrying with L402 token...
+  Status: 200
+
+{
+  "aqi": 42,
+  "location": "Portland, OR",
+  ...
+}
+
+Paid 1,047 sats via Ark OOR (1.8s total).
+```
+
+**What to say:**
+- "1.2 seconds for the payment vs ~12 seconds via Lightning. Same L402 protocol, same macaroon verification, just a faster payment rail."
+- "The gateway generates its own preimage, detects the incoming VTXO, and reveals the preimage to the client. Standard L402 from there."
+- "The amount has a small random suffix (47 sats here) — that's how the gateway matches payments. Two simultaneous requests get different amounts."
+
+**Show both rails in stats:**
+```bash
+npm run golem -- stats
+```
+
+```
+L402 Gateway Stats
+
+  Total requests:     7
+  Paid requests:      3
+  Challenges issued:  4
+  Sats earned:        3,047
+
+  Payment Rails:
+    Lightning:  2 paid, 2000 sats
+    Ark OOR:    1 paid, 1047 sats
+```
+
+**What to say:**
+- "Two Lightning payments, one Ark. Revenue from both rails in one dashboard."
+- "For machine-to-machine payments — AI agents paying for APIs — the speed difference matters. 1 second vs 12 seconds is the difference between real-time and noticeable latency."
+
+> **If Ark OOR fails:** The wallet may not have enough balance for the randomized amount. Ensure the wallet is funded. If sendBitcoin errors, fall back to: "The OOR requires balance in the Ark wallet. Let me show Lightning instead." Then run `npm run golem -- pay http://localhost:8402/v1/aqi` (defaults to Lightning).
+
+---
+
 ## Key Messages
 
 Weave these into the conversation naturally. Don't read them as a list.

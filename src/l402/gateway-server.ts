@@ -59,15 +59,27 @@ const lightning = new ArkadeLightning({
 await lightning.startSwapManager();
 console.log('SwapManager started');
 
+// --- Ark address for OOR payments ---
+
+let arkAddress: string | undefined;
+try {
+  arkAddress = await wallet.getAddress();
+  console.log(`Ark OOR payments enabled: ${arkAddress}`);
+} catch (err) {
+  console.warn('Could not get Ark address — Ark OOR payments disabled:', err instanceof Error ? err.message : err);
+}
+
 // --- Gateway ---
 
 const gateway = createL402Gateway(lightning, {
   priceSats,
   rootKeyStore,
   description,
-  freePaths,
+  freePaths: [...freePaths, '/l402/preimage'],
   ttlSeconds,
   rateLimitPerMinute,
+  arkAddress,
+  wallet: arkAddress ? wallet.sdkWallet : undefined,
 });
 
 // --- App ---
@@ -86,6 +98,9 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 
 // Free: stats
 app.get('/stats', (c) => c.json(gateway.stats));
+
+// Free: preimage endpoint (Ark OOR payment polling)
+app.get('/l402/preimage', gateway.preimageHandler);
 
 // All other routes: L402 gated, proxied to upstream
 app.use('/*', gateway.middleware);
@@ -124,11 +139,22 @@ app.all('/*', async (c) => {
 
 // --- Start ---
 
-serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
-  console.log(`L402 gateway running on http://0.0.0.0:${port}`);
+const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
+  console.log(`L402 gateway running on http://0.0.0.0:${port} ${arkAddress ? '(dual-mode: Lightning + Ark)' : '(Lightning only)'}`);
   console.log(`  Upstream: ${upstreamUrl}`);
   console.log(`  Price: ${priceSats} sats/request`);
   console.log(`  TTL: ${ttlSeconds}s`);
   console.log(`  Rate limit: ${rateLimitPerMinute}/min per IP`);
   console.log(`  Free paths: ${freePaths.join(', ')}`);
+  if (arkAddress) {
+    console.log(`  Ark addr: ${arkAddress}`);
+  }
+});
+
+// Clean shutdown
+process.on('SIGINT', () => {
+  console.log('\nShutting down...');
+  gateway.dispose();
+  server.close();
+  process.exit(0);
 });

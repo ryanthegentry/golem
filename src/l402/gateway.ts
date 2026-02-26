@@ -1,13 +1,15 @@
 /**
  * L402 Gateway — Hono middleware that gates HTTP routes behind Lightning payments.
  *
- * Unpaid requests get a 402 with a V2 binary macaroon + invoice.
+ * Dual-mode: accepts both Lightning (via Boltz reverse swaps) and Ark-native OOR payments.
+ * Unpaid requests get a 402 with a V2 binary macaroon + invoice (+ optional Ark payment option).
  * Paid requests include "Authorization: L402 <macaroon>:<preimage>" and pass through.
  *
  * Security: per-macaroon root keys via RootKeyStore, time-before caveats,
  * constant-time preimage verification, IP-based rate limiting.
  */
 
+import { randomBytes, createHash } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { ArkadeLightning } from '@arkade-os/boltz-swap';
 import {
@@ -18,6 +20,22 @@ import {
   MemoryRootKeyStore,
   type RootKeyStore,
 } from './macaroon.js';
+
+export interface PendingArkPayment {
+  paymentId: string;
+  paymentHash: string;
+  preimage: string;
+  macaroonBase64: string;
+  amount: number;
+  createdAt: number;
+  expiresAt: number;
+  fulfilled: boolean;
+}
+
+/** Narrow wallet interface — only what the gateway needs for Ark OOR detection. */
+export interface ArkWalletNotifier {
+  notifyIncomingFunds(): AsyncIterable<unknown>;
+}
 
 export interface GatewayConfig {
   /** Price per request in satoshis */
@@ -34,6 +52,10 @@ export interface GatewayConfig {
   ttlSeconds?: number;
   /** Max 402 challenges per IP per minute (default: 30, 0 = disabled) */
   rateLimitPerMinute?: number;
+  /** Ark address for OOR payments. Enables dual-mode if set. */
+  arkAddress?: string;
+  /** Wallet for Ark OOR VTXO detection. Required if arkAddress is set. */
+  wallet?: ArkWalletNotifier;
 }
 
 export interface GatewayStats {
@@ -42,12 +64,20 @@ export interface GatewayStats {
   challengesIssued: number;
   totalSatsEarned: number;
   rateLimited: number;
+  lightningPaidRequests: number;
+  lightningEarned: number;
+  arkPaidRequests: number;
+  arkEarned: number;
+  arkPendingPayments: number;
 }
 
 export interface L402Gateway {
   middleware: MiddlewareHandler;
+  preimageHandler: MiddlewareHandler;
   stats: GatewayStats;
   rootKeyStore: RootKeyStore;
+  pendingPayments: Map<string, PendingArkPayment>;
+  dispose(): void;
 }
 
 /**
@@ -58,14 +88,19 @@ class RateLimiter {
   private windows = new Map<string, number[]>();
   private readonly limit: number;
   private readonly windowMs = 60_000;
+  private readonly exemptPaths = new Set<string>();
 
-  constructor(limit: number) {
+  constructor(limit: number, exemptPaths?: string[]) {
     this.limit = limit;
+    if (exemptPaths) {
+      for (const p of exemptPaths) this.exemptPaths.add(p);
+    }
   }
 
   /** Returns true if the request should be rate-limited (rejected). */
-  check(ip: string): boolean {
+  check(ip: string, path?: string): boolean {
     if (this.limit <= 0) return false;
+    if (path && this.exemptPaths.has(path)) return false;
 
     const now = Date.now();
     const cutoff = now - this.windowMs;
@@ -91,13 +126,18 @@ class RateLimiter {
 }
 
 /**
- * Creates an L402 gateway middleware.
+ * Creates an L402 gateway middleware with dual-mode payment support.
  *
  * Flow:
  * 1. Free path? → pass through
  * 2. Has valid L402 Authorization header? → verify → pass through
  * 3. Rate limit check on 402 challenges
- * 4. Otherwise → create invoice, mint macaroon → 402 challenge
+ * 4. Otherwise → create Lightning invoice + optional Ark payment option → 402 challenge
+ *
+ * Ark OOR payments use gateway-generated preimages. The consumer pays via
+ * wallet.sendBitcoin(), gateway detects the VTXO, and reveals the preimage
+ * at GET /l402/preimage?payment_id=X. The consumer then uses the standard
+ * L402 Authorization header — identical to Lightning.
  */
 export function createL402Gateway(
   lightning: ArkadeLightning,
@@ -109,7 +149,13 @@ export function createL402Gateway(
   const priceSats = config.priceSats;
   const ttlSeconds = config.ttlSeconds ?? 300;
   const description = config.description ?? `Payment required: ${priceSats} sats`;
-  const rateLimiter = new RateLimiter(config.rateLimitPerMinute ?? 30);
+  const arkEnabled = !!(config.arkAddress && config.wallet);
+  const arkAddress = config.arkAddress;
+
+  // Exempt /l402/preimage from rate limiting — consumers poll it every 500ms
+  const rateLimiter = new RateLimiter(config.rateLimitPerMinute ?? 30, ['/l402/preimage']);
+
+  const pendingPayments = new Map<string, PendingArkPayment>();
 
   const stats: GatewayStats = {
     totalRequests: 0,
@@ -117,7 +163,67 @@ export function createL402Gateway(
     challengesIssued: 0,
     totalSatsEarned: 0,
     rateLimited: 0,
+    lightningPaidRequests: 0,
+    lightningEarned: 0,
+    arkPaidRequests: 0,
+    arkEarned: 0,
+    arkPendingPayments: 0,
   };
+
+  /**
+   * Match an incoming VTXO amount against pending Ark payments (FIFO order).
+   * Each 402 challenge adds a random 1-99 sat suffix to the Ark amount, so
+   * exact-amount matching disambiguates concurrent payments. Extremely high
+   * concurrency could still collide (known limitation).
+   */
+  function matchIncomingVtxo(amountSats: number): PendingArkPayment | null {
+    const now = Date.now();
+    for (const pending of pendingPayments.values()) {
+      if (!pending.fulfilled && pending.expiresAt > now && pending.amount === amountSats) {
+        pending.fulfilled = true;
+        stats.arkPendingPayments = [...pendingPayments.values()].filter(p => !p.fulfilled && p.expiresAt > now).length;
+        console.log(`[l402:ark] VTXO matched payment ${pending.paymentId} (${amountSats} sats)`);
+        return pending;
+      }
+    }
+    return null;
+  }
+
+  // Start VTXO listener if Ark is enabled
+  let vtxoListenerAbort: AbortController | null = null;
+  if (arkEnabled && config.wallet) {
+    vtxoListenerAbort = new AbortController();
+    const wallet = config.wallet;
+    (async () => {
+      try {
+        for await (const event of wallet.notifyIncomingFunds()) {
+          if (vtxoListenerAbort?.signal.aborted) break;
+          // Extract amount from the VTXO event
+          const vtxo = event as { amount?: number; value?: number };
+          const amount = vtxo.amount ?? vtxo.value;
+          if (typeof amount === 'number' && amount > 0) {
+            matchIncomingVtxo(amount);
+          }
+        }
+      } catch (err) {
+        if (!vtxoListenerAbort?.signal.aborted) {
+          console.error('[l402:ark] VTXO listener error:', err instanceof Error ? err.message : err);
+        }
+      }
+    })();
+    console.log(`[l402:ark] VTXO listener started for ${arkAddress}`);
+  }
+
+  // Cleanup expired pending payments every 10s
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, pending] of pendingPayments) {
+      if (pending.expiresAt <= now) {
+        pendingPayments.delete(id);
+      }
+    }
+    stats.arkPendingPayments = [...pendingPayments.values()].filter(p => !p.fulfilled && p.expiresAt > now).length;
+  }, 10_000);
 
   const middleware: MiddlewareHandler = async (c, next) => {
     stats.totalRequests++;
@@ -137,7 +243,20 @@ export function createL402Gateway(
         if (result.valid) {
           stats.paidRequests++;
           stats.totalSatsEarned += priceSats;
-          console.log(`[l402] Verified payment for ${reqPath} (hash: ${result.paymentHash?.slice(0, 16)}...)`);
+
+          // Track per-rail stats: check if paymentHash matches a pending Ark payment
+          const arkPayment = result.paymentHash
+            ? [...pendingPayments.values()].find(p => p.paymentHash === result.paymentHash)
+            : null;
+          if (arkPayment) {
+            stats.arkPaidRequests++;
+            stats.arkEarned += priceSats;
+            console.log(`[l402:ark] Verified Ark payment for ${reqPath} (hash: ${result.paymentHash?.slice(0, 16)}...)`);
+          } else {
+            stats.lightningPaidRequests++;
+            stats.lightningEarned += priceSats;
+            console.log(`[l402] Verified Lightning payment for ${reqPath} (hash: ${result.paymentHash?.slice(0, 16)}...)`);
+          }
           return next();
         }
         console.log(`[l402] Invalid L402 token for ${reqPath}: ${result.error}`);
@@ -148,7 +267,7 @@ export function createL402Gateway(
     const clientIp = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
       || c.req.header('x-real-ip')
       || 'unknown';
-    if (rateLimiter.check(clientIp)) {
+    if (rateLimiter.check(clientIp, reqPath)) {
       stats.rateLimited++;
       console.log(`[l402] Rate limited ${clientIp} for ${reqPath}`);
       return c.json({ error: 'Too many requests' }, 429);
@@ -166,16 +285,62 @@ export function createL402Gateway(
       const challenge = formatL402Challenge(macaroonBase64, invoiceResult.invoice);
 
       stats.challengesIssued++;
-      console.log(`[l402] Issued 402 challenge for ${reqPath} (${priceSats} sats)`);
 
-      return c.json({
+      // Build response body
+      const responseBody: Record<string, unknown> = {
         error: 'Payment Required',
         description,
         price: priceSats,
         invoice: invoiceResult.invoice,
         macaroon: macaroonBase64,
         paymentHash,
-      }, 402, {
+      };
+
+      // Add Ark payment option if enabled
+      if (arkEnabled && arkAddress) {
+        const arkPreimage = randomBytes(32).toString('hex');
+        const arkPaymentHash = createHash('sha256')
+          .update(Buffer.from(arkPreimage, 'hex'))
+          .digest('hex');
+        const paymentId = randomBytes(16).toString('hex');
+
+        const arkMac = mintL402Macaroon(rootKeyStore, {
+          paymentHash: arkPaymentHash,
+          location: 'golem',
+          ttlSeconds,
+          caveats,
+        });
+
+        // Random 1-99 sat suffix to disambiguate concurrent payments
+        const arkAmount = priceSats + Math.floor(Math.random() * 99) + 1;
+
+        const pending: PendingArkPayment = {
+          paymentId,
+          paymentHash: arkPaymentHash,
+          preimage: arkPreimage,
+          macaroonBase64: arkMac.macaroonBase64,
+          amount: arkAmount,
+          createdAt: Date.now(),
+          expiresAt: Date.now() + ttlSeconds * 1000,
+          fulfilled: false,
+        };
+        pendingPayments.set(paymentId, pending);
+        stats.arkPendingPayments++;
+
+        responseBody.ark_payment = {
+          address: arkAddress,
+          amount: arkAmount,
+          payment_id: paymentId,
+          macaroon: arkMac.macaroonBase64,
+        };
+
+        console.log(`[l402] Issued dual 402 challenge for ${reqPath} (${priceSats} sats LN / ${arkAmount} sats Ark)`);
+      } else {
+        console.log(`[l402] Issued 402 challenge for ${reqPath} (${priceSats} sats)`);
+      }
+
+      return c.json(responseBody, 402, {
+        // WWW-Authenticate stays Lightning-only for backward compat with lnget
         'WWW-Authenticate': challenge,
       });
     } catch (err) {
@@ -184,5 +349,39 @@ export function createL402Gateway(
     }
   };
 
-  return { middleware, stats, rootKeyStore };
+  /**
+   * Preimage handler — GET /l402/preimage?payment_id=X
+   * Returns the preimage after VTXO detection confirms Ark payment.
+   */
+  const preimageHandler: MiddlewareHandler = async (c) => {
+    const paymentId = c.req.query('payment_id');
+    if (!paymentId) {
+      return c.json({ error: 'Missing payment_id parameter' }, 400);
+    }
+
+    const pending = pendingPayments.get(paymentId);
+    if (!pending || pending.expiresAt <= Date.now()) {
+      return c.json({ error: 'Unknown or expired payment' }, 404);
+    }
+
+    if (!pending.fulfilled) {
+      return c.json({ status: 'pending', message: 'Waiting for VTXO detection' }, 202);
+    }
+
+    return c.json({
+      preimage: pending.preimage,
+      macaroon: pending.macaroonBase64,
+    }, 200);
+  };
+
+  function dispose() {
+    if (vtxoListenerAbort) {
+      vtxoListenerAbort.abort();
+      vtxoListenerAbort = null;
+    }
+    clearInterval(cleanupInterval);
+    console.log('[l402] Gateway disposed');
+  }
+
+  return { middleware, preimageHandler, stats, rootKeyStore, pendingPayments, dispose };
 }
