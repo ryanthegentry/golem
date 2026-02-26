@@ -19,6 +19,7 @@ import { initCommand } from './commands/init.js';
 import { balanceCommand } from './commands/balance.js';
 import { gatewayCommand } from './commands/gateway.js';
 import { statsCommand } from './commands/stats.js';
+import { payCommand } from './commands/pay.js';
 
 const program = new Command()
   .name('golem')
@@ -29,5 +30,6 @@ program.addCommand(initCommand);
 program.addCommand(balanceCommand);
 program.addCommand(gatewayCommand);
 program.addCommand(statsCommand);
+program.addCommand(payCommand);
 
 program.parse();
