@@ -37,8 +37,12 @@ const BOLTZ_API = 'https://api.boltz.mutinynet.arkade.sh';
 const PAYER_KEY = 'e0f60aacd061005ae3e59d0540af2caafbcb895212c180c2c1b8813a49d61d1e';
 
 // Voltage LND node on mutinynet
-const LND_REST_URL = 'https://golem-tester.u.voltageapp.io:8080';
-const LND_MACAROON_BASE64 = 'AgEDbG5kAvgBAwoQfYr3AxBI2k4mkn4Tzb14mBIBMBoWCgdhZGRyZXNzEgRyZWFkEgV3cml0ZRoTCgRpbmZvEgRyZWFkEgV3cml0ZRoXCghpbnZvaWNlcxIEcmVhZBIFd3JpdGUaIQoIbWFjYXJvb24SCGdlbmVyYXRlEgRyZWFkEgV3cml0ZRoWCgdtZXNzYWdlEgRyZWFkEgV3cml0ZRoXCghvZmZjaGFpbhIEcmVhZBIFd3JpdGUaFgoHb25jaGFpbhIEcmVhZBIFd3JpdGUaFAoFcGVlcnMSBHJlYWQSBXdyaXRlGhgKBnNpZ25lchIIZ2VuZXJhdGUSBHJlYWQAAAYgu+fRTEeEh3TAB077175/OTkCRU+/UzWKIHfUa/6Rgvw=';
+const LND_REST_URL = process.env.VOLTAGE_LND_URL || 'https://golem-tester.u.voltageapp.io:8080';
+const LND_MACAROON_BASE64 = process.env.VOLTAGE_MACAROON;
+if (!LND_MACAROON_BASE64) {
+  console.error('VOLTAGE_MACAROON env var required (base64-encoded LND admin macaroon)');
+  process.exit(1);
+}
 const LND_MACAROON_HEX = Buffer.from(LND_MACAROON_BASE64, 'base64').toString('hex');
 
 // Faucet node pubkey (LND's channel partner)
