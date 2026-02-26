@@ -9,6 +9,7 @@ import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
 import { MUTINYNET_CONFIG } from '../wallet/config.js';
 import { createL402Gateway } from './gateway.js';
+import { FileRootKeyStore, MemoryRootKeyStore } from './macaroon.js';
 
 // --- Config from env ---
 
@@ -27,15 +28,21 @@ if (!signerKey) {
 const priceSats = parseInt(process.env.GOLEM_PRICE_SATS || '1', 10);
 const port = parseInt(process.env.GOLEM_PORT || '8402', 10);
 const freePaths = (process.env.GOLEM_FREE_PATHS || '/health,/docs').split(',').map(p => p.trim());
-const rootKey = process.env.GOLEM_ROOT_KEY;
 const description = process.env.GOLEM_DESCRIPTION;
+const ttlSeconds = parseInt(process.env.GOLEM_TTL_SECONDS || '300', 10);
+const rateLimitPerMinute = parseInt(process.env.GOLEM_RATE_LIMIT || '30', 10);
+const dataDir = process.env.GOLEM_DATA_DIR || './data-l402';
+
+// Root key store — file-backed for persistence across restarts
+const rootKeyStore = new FileRootKeyStore(dataDir);
+console.log(`[l402] Root keys stored at: ${rootKeyStore.getFilePath()}`);
 
 // --- Initialize wallet + lightning ---
 
 console.log('Initializing Golem wallet for L402 gateway...');
 
 const signer = MockSigner.fromSecretKey(Buffer.from(signerKey, 'hex'));
-const wallet = await GolemWallet.create(signer, { ...MUTINYNET_CONFIG, dataDir: './data-l402' });
+const wallet = await GolemWallet.create(signer, { ...MUTINYNET_CONFIG, dataDir });
 
 const swapProvider = new BoltzSwapProvider({
   apiUrl: 'https://api.boltz.mutinynet.arkade.sh',
@@ -56,14 +63,23 @@ console.log('SwapManager started');
 
 const gateway = createL402Gateway(lightning, {
   priceSats,
-  rootKey,
+  rootKeyStore,
   description,
   freePaths,
+  ttlSeconds,
+  rateLimitPerMinute,
 });
 
 // --- App ---
 
 const app = new Hono();
+
+// Security headers on all responses
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+});
 
 // Free: health check
 app.get('/health', (c) => c.json({ status: 'ok' }));
@@ -112,5 +128,7 @@ serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
   console.log(`L402 gateway running on http://0.0.0.0:${port}`);
   console.log(`  Upstream: ${upstreamUrl}`);
   console.log(`  Price: ${priceSats} sats/request`);
+  console.log(`  TTL: ${ttlSeconds}s`);
+  console.log(`  Rate limit: ${rateLimitPerMinute}/min per IP`);
   console.log(`  Free paths: ${freePaths.join(', ')}`);
 });

@@ -1,170 +1,296 @@
 /**
- * L402 Macaroon utilities for Golem Gateway.
+ * L402 Macaroon module — V2 binary format via the `macaroon` npm package.
  *
- * Manual implementation — the macaroon npm packages have poor TypeScript
- * support and heavyweight dependencies. The L402 macaroon format is simple:
- *
- * Identifier: version (2 bytes, uint16 BE, value 0) + payment_hash (32 bytes)
- * Signature:  HMAC-SHA256 chain starting from root key
- * Caveats:    First-party only, each caveat updates the signature via HMAC
+ * Replaces the custom JSON-based implementation with the official JS port
+ * of the Go macaroon library (same as LND/Aperture). Adds:
+ * - V2 binary serialization (lnget-compatible)
+ * - Per-macaroon root keys via RootKeyStore
+ * - Time-before caveats for replay protection
+ * - Constant-time preimage verification via crypto.timingSafeEqual
  */
 
-import { createHmac, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {
+  newMacaroon,
+  importMacaroon,
+  base64ToBytes,
+  bytesToBase64,
+} from 'macaroon';
 
-// --- Internal types ---
+// --- Types ---
 
-interface Macaroon {
-  location: string;
-  identifier: Buffer;   // 2-byte version + 32-byte payment_hash
-  caveats: string[];
-  signature: Buffer;     // 32-byte HMAC-SHA256
+export interface MintResult {
+  /** Base64-encoded V2 binary macaroon */
+  macaroonBase64: string;
+  /** Payment hash hex (from the identifier) */
+  paymentHash: string;
+  /** Root key ID (hex) — used to look up the root key later */
+  rootKeyId: string;
 }
 
-// --- Helpers ---
-
-function hmacSha256(key: Buffer, data: Buffer): Buffer {
-  return createHmac('sha256', key).update(data).digest();
+export interface VerifyResult {
+  valid: boolean;
+  paymentHash?: string;
+  error?: string;
 }
 
-function deriveMacaroonKey(rootKey: Buffer): Buffer {
-  // Macaroon spec: derive key = HMAC-SHA256(key="macaroons-key-generator", rootKey)
-  return hmacSha256(Buffer.from('macaroons-key-generator'), rootKey);
+export interface RootKeyStore {
+  getKey(id: string): Buffer | null;
+  putKey(id: string, key: Buffer): void;
+  deleteKey(id: string): void;
 }
 
-function computeSignature(derivedKey: Buffer, identifier: Buffer, caveats: string[]): Buffer {
-  // sig = HMAC(derivedKey, identifier)
-  let sig = hmacSha256(derivedKey, identifier);
-  // For each caveat: sig = HMAC(sig, caveat)
-  for (const caveat of caveats) {
-    sig = hmacSha256(sig, Buffer.from(caveat, 'utf-8'));
+export interface MintOptions {
+  /** Payment hash hex (32 bytes / 64 chars) */
+  paymentHash: string;
+  /** Macaroon location (default: "golem") */
+  location?: string;
+  /** TTL in seconds (default: 300). Added as time-before caveat. */
+  ttlSeconds?: number;
+  /** Additional first-party caveats */
+  caveats?: string[];
+}
+
+// --- Root Key Store ---
+
+/**
+ * In-memory root key store. Keys are lost on restart.
+ * For PoC/testing use.
+ */
+export class MemoryRootKeyStore implements RootKeyStore {
+  private keys = new Map<string, Buffer>();
+
+  getKey(id: string): Buffer | null {
+    return this.keys.get(id) ?? null;
   }
-  return sig;
-}
 
-function serializeMacaroon(m: Macaroon): string {
-  // Simple JSON-based serialization encoded as base64.
-  // Production L402 uses libmacaroons binary format, but JSON is fine for PoC
-  // and interop testing — the spec doesn't mandate wire format for the token.
-  const obj = {
-    l: m.location,
-    i: m.identifier.toString('hex'),
-    c: m.caveats,
-    s: m.signature.toString('hex'),
-  };
-  return Buffer.from(JSON.stringify(obj)).toString('base64');
-}
+  putKey(id: string, key: Buffer): void {
+    this.keys.set(id, key);
+  }
 
-function deserializeMacaroon(base64: string): Macaroon | null {
-  try {
-    const json = Buffer.from(base64, 'base64').toString('utf-8');
-    const obj = JSON.parse(json);
-    return {
-      location: obj.l,
-      identifier: Buffer.from(obj.i, 'hex'),
-      caveats: obj.c ?? [],
-      signature: Buffer.from(obj.s, 'hex'),
-    };
-  } catch {
-    return null;
+  deleteKey(id: string): void {
+    this.keys.delete(id);
   }
 }
 
-function buildIdentifier(paymentHash: string): Buffer {
-  // L402 identifier: version (uint16 BE, value 0) + payment_hash (32 bytes)
-  const buf = Buffer.alloc(34);
-  buf.writeUInt16BE(0, 0);  // version = 0
+/**
+ * File-backed root key store. Persists keys to a JSON file with 0600 permissions.
+ * Keys are stored separately from config.json.
+ */
+export class FileRootKeyStore implements RootKeyStore {
+  private keys = new Map<string, Buffer>();
+  private readonly filePath: string;
+
+  constructor(dir: string) {
+    this.filePath = path.join(dir, 'root-keys.json');
+    this.load();
+  }
+
+  getKey(id: string): Buffer | null {
+    return this.keys.get(id) ?? null;
+  }
+
+  putKey(id: string, key: Buffer): void {
+    this.keys.set(id, key);
+    this.save();
+  }
+
+  deleteKey(id: string): void {
+    this.keys.delete(id);
+    this.save();
+  }
+
+  getFilePath(): string {
+    return this.filePath;
+  }
+
+  private load(): void {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
+        for (const [id, hex] of Object.entries(raw)) {
+          this.keys.set(id, Buffer.from(hex as string, 'hex'));
+        }
+      }
+    } catch {
+      // Start fresh on corrupt file
+    }
+  }
+
+  private save(): void {
+    const dir = path.dirname(this.filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const obj: Record<string, string> = {};
+    for (const [id, key] of this.keys) {
+      obj[id] = key.toString('hex');
+    }
+    fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+  }
+}
+
+// --- Identifier encoding ---
+
+/**
+ * L402 identifier: version (uint16 BE) + payment_hash (32 bytes) + root_key_id (4 bytes)
+ * Total: 38 bytes
+ */
+function buildIdentifier(paymentHash: string, rootKeyId: string): Uint8Array {
+  const buf = Buffer.alloc(38);
+  buf.writeUInt16BE(0, 0); // version = 0
   Buffer.from(paymentHash, 'hex').copy(buf, 2);
-  return buf;
+  Buffer.from(rootKeyId, 'hex').copy(buf, 34, 0, 4);
+  return new Uint8Array(buf);
 }
 
-function extractPaymentHash(identifier: Buffer): string | null {
-  if (identifier.length !== 34) return null;
-  return identifier.subarray(2, 34).toString('hex');
+function parseIdentifier(id: Uint8Array): { paymentHash: string; rootKeyId: string } | null {
+  if (id.length < 38) return null;
+  const buf = Buffer.from(id);
+  const paymentHash = buf.subarray(2, 34).toString('hex');
+  const rootKeyId = buf.subarray(34, 38).toString('hex');
+  return { paymentHash, rootKeyId };
 }
 
 // --- Public API ---
 
 /**
- * Mint a new L402 macaroon for a payment challenge.
- *
- * The identifier encodes: version (0) + payment_hash (32 bytes).
- * Signature is HMAC-SHA256 chain from derived root key.
- *
- * @param rootKey - Server's root key (32 bytes, hex). Keep secret.
- * @param paymentHash - sha256 of the preimage (hex, from createLightningInvoice)
- * @param location - Macaroon location field (default: "golem")
- * @param caveats - Optional first-party caveats, e.g. ["service=api", "tier=standard"]
- * @returns Base64-encoded serialized macaroon
+ * Mint an L402 macaroon with per-macaroon root key and time-before caveat.
  */
 export function mintL402Macaroon(
-  rootKey: string,
-  paymentHash: string,
-  location = 'golem',
-  caveats: string[] = [],
-): string {
-  const identifier = buildIdentifier(paymentHash);
-  const derivedKey = deriveMacaroonKey(Buffer.from(rootKey, 'hex'));
-  const signature = computeSignature(derivedKey, identifier, caveats);
+  store: RootKeyStore,
+  opts: MintOptions,
+): MintResult {
+  const { paymentHash, location = 'golem', ttlSeconds = 300, caveats = [] } = opts;
 
-  return serializeMacaroon({
-    location,
+  // Generate unique root key for this macaroon
+  const rootKey = randomBytes(32);
+  const rootKeyId = randomBytes(4).toString('hex');
+
+  // Store the root key
+  store.putKey(rootKeyId, rootKey);
+
+  // Build L402 identifier
+  const identifier = buildIdentifier(paymentHash, rootKeyId);
+
+  // Create macaroon via the library
+  const mac = newMacaroon({
+    rootKey: new Uint8Array(rootKey),
     identifier,
-    caveats,
-    signature,
+    location,
   });
+
+  // Add time-before caveat
+  const expiry = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+  mac.addFirstPartyCaveat(`time-before ${expiry}`);
+
+  // Add additional caveats
+  for (const caveat of caveats) {
+    mac.addFirstPartyCaveat(caveat);
+  }
+
+  // Export as V2 binary, then base64
+  const binary = mac.exportBinary();
+  const macaroonBase64 = Buffer.from(binary).toString('base64');
+
+  return { macaroonBase64, paymentHash, rootKeyId };
 }
 
 /**
  * Verify an L402 token (macaroon + preimage).
  *
- * 1. Deserialize macaroon
- * 2. Extract payment_hash from identifier
- * 3. Verify sha256(preimage) === payment_hash
- * 4. Recompute and verify HMAC signature
- * 5. Check caveats if provided
+ * 1. Decode base64 → V2 binary → import macaroon
+ * 2. Extract payment_hash and root_key_id from identifier
+ * 3. Look up root key from store
+ * 4. Verify macaroon signature (library handles HMAC chain)
+ * 5. Check time-before caveat
+ * 6. Verify sha256(preimage) === payment_hash (constant-time)
  */
 export function verifyL402Token(
-  rootKey: string,
+  store: RootKeyStore,
   macaroonBase64: string,
-  preimage: string,
-  caveatsToVerify?: string[],
-): { valid: boolean; paymentHash?: string; error?: string } {
-  const m = deserializeMacaroon(macaroonBase64);
-  if (!m) {
+  preimageHex: string,
+): VerifyResult {
+  // Step 1: Import macaroon
+  let mac: ReturnType<typeof importMacaroon>;
+  try {
+    const binary = Buffer.from(macaroonBase64, 'base64');
+    mac = importMacaroon(new Uint8Array(binary));
+  } catch {
     return { valid: false, error: 'failed to deserialize macaroon' };
   }
 
-  // Extract payment hash from identifier
-  const paymentHash = extractPaymentHash(m.identifier);
-  if (!paymentHash) {
-    return { valid: false, error: 'invalid identifier length' };
+  // Step 2: Extract identifier
+  const json = mac.exportJSON();
+  let idBytes: Uint8Array;
+  if (json.i64) {
+    idBytes = new Uint8Array(Buffer.from(json.i64 as string, 'base64'));
+  } else if (json.i) {
+    idBytes = new Uint8Array(Buffer.from(json.i as string, 'utf-8'));
+  } else {
+    return { valid: false, error: 'missing identifier in macaroon' };
   }
 
-  // Verify preimage: sha256(preimage) must equal payment_hash
+  const parsed = parseIdentifier(idBytes);
+  if (!parsed) {
+    return { valid: false, error: 'invalid identifier format' };
+  }
+
+  // Step 3: Look up root key
+  const rootKey = store.getKey(parsed.rootKeyId);
+  if (!rootKey) {
+    return { valid: false, error: 'unknown root key' };
+  }
+
+  // Step 4: Verify macaroon signature via library
+  try {
+    mac.verify(new Uint8Array(rootKey), (caveat: string) => {
+      // Check time-before caveat
+      if (caveat.startsWith('time-before ')) {
+        const expiry = new Date(caveat.slice('time-before '.length));
+        if (isNaN(expiry.getTime())) return 'invalid time-before format';
+        if (Date.now() > expiry.getTime()) return 'macaroon expired';
+        return null; // OK
+      }
+      // Allow all other first-party caveats (service, etc.)
+      return null;
+    }, []);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('expired')) {
+      return { valid: false, error: 'macaroon expired' };
+    }
+    return { valid: false, error: `macaroon verification failed: ${msg}` };
+  }
+
+  // Step 5: Verify preimage (constant-time comparison)
   const computedHash = createHash('sha256')
-    .update(Buffer.from(preimage, 'hex'))
-    .digest('hex');
-  if (computedHash !== paymentHash) {
+    .update(Buffer.from(preimageHex, 'hex'))
+    .digest();
+  const expectedHash = Buffer.from(parsed.paymentHash, 'hex');
+
+  if (computedHash.length !== expectedHash.length ||
+      !timingSafeEqual(computedHash, expectedHash)) {
     return { valid: false, error: 'preimage does not match payment hash' };
   }
 
-  // Verify signature
-  const derivedKey = deriveMacaroonKey(Buffer.from(rootKey, 'hex'));
-  const expectedSig = computeSignature(derivedKey, m.identifier, m.caveats);
-  if (!expectedSig.equals(m.signature)) {
-    return { valid: false, error: 'invalid macaroon signature' };
-  }
+  return { valid: true, paymentHash: parsed.paymentHash };
+}
 
-  // Verify caveats — each required caveat must be present in the macaroon
-  if (caveatsToVerify) {
-    for (const required of caveatsToVerify) {
-      if (!m.caveats.includes(required)) {
-        return { valid: false, error: `missing caveat: ${required}` };
-      }
-    }
-  }
+// --- Header formatting ---
 
-  return { valid: true, paymentHash };
+/**
+ * Format a 402 WWW-Authenticate header value.
+ * Format: L402 macaroon="<base64_v2_binary>", invoice="<bolt11>"
+ */
+export function formatL402Challenge(
+  macaroonBase64: string,
+  invoice: string,
+): string {
+  return `L402 macaroon="${macaroonBase64}", invoice="${invoice}"`;
 }
 
 /**
@@ -186,15 +312,4 @@ export function parseL402Header(
   if (!macaroon || !preimage) return null;
 
   return { macaroon, preimage };
-}
-
-/**
- * Format a 402 WWW-Authenticate header value.
- * Format: L402 macaroon="<base64>", invoice="<bolt11>"
- */
-export function formatL402Challenge(
-  macaroonBase64: string,
-  invoice: string,
-): string {
-  return `L402 macaroon="${macaroonBase64}", invoice="${invoice}"`;
 }

@@ -9,6 +9,7 @@ import { BoltzSwapProvider, ArkadeLightning } from '@arkade-os/boltz-swap';
 import { loadConfig } from '../config.js';
 import { createWalletFromConfig } from '../wallet.js';
 import { createL402Gateway } from '../../l402/gateway.js';
+import { MemoryRootKeyStore } from '../../l402/macaroon.js';
 import { MUTINYNET_LIGHTNING_CONFIG } from '../../lightning/config.js';
 
 export const gatewayCommand = new Command('gateway')
