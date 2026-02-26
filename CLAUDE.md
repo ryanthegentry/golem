@@ -36,7 +36,7 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 
 **Server startup:** `GOLEM_SIGNER_KEY=<hex> npm start`
 **Ryan's testnet key:** `e0f60aacd061005ae3e59d0540af2caafbcb895212c180c2c1b8813a49d61d1e`
-**Tests:** 66 passing, zero TypeScript errors
+**Tests:** 93 passing, zero TypeScript errors
 **SDK bugs filed:** arkade-os/ts-sdk#310, #311, #312
 
 ### Task Priority
@@ -53,7 +53,8 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 8 | Safe harbor address setup + emergency exit | TODO |
 | 9 | Wallet UI (PWA + API server) | DONE |
 | 10 | L402 Lightning-gated reverse proxy | DONE |
-| 11 | Railway template with /setup wizard | TODO |
+| 11 | CLI: init, balance, gateway, stats | DONE |
+| 12 | Railway template with /setup wizard | TODO |
 
 ### L402 Gateway (Feb 25–26, 2026)
 
@@ -69,6 +70,20 @@ L402 reverse proxy backed by Ark via Boltz swaps — no LND required. Verified w
 **Liquidity setup for testing:** Keysend (LND→faucet for inbound) → submarine swap (Ark→LND for Boltz ARK liquidity) → reverse swap (LND→Ark for L402 payment). All three directions must have liquidity.
 
 **Known issue:** Boltz mutinynet reverse swaps fail with "onchain coins could not be sent" when Boltz has no ARK liquidity. Fixed by priming Boltz via submarine swap first.
+
+### Golem CLI (Feb 26, 2026)
+
+Commander.js CLI with `~/.golem/config.json` persistence. Live-validated end-to-end on mutinynet.
+
+**Commands:**
+- `golem init` — Generate wallet, connect to Ark server, save config. `--network`, `--ark-server`, `--force`.
+- `golem balance` — Show total/available/settled/boarding sats + address.
+- `golem gateway` — L402 reverse proxy. `--upstream` (required), `--price` (required), `--port`, `--free-paths`.
+- `golem stats` — Query running gateway's `/stats` endpoint.
+
+**Files:** `src/cli/index.ts` (entry), `src/cli/config.ts`, `src/cli/wallet.ts` (shared init), `src/cli/commands/{init,balance,gateway,stats}.ts`, `src/cli/cli.test.ts` (7 tests).
+
+**Usage:** `npm run golem -- <command>` or after build: `npx golem <command>`.
 
 ### Next Priorities
 1. Transaction detail view (expand row → full txid, timestamp, type, status)
