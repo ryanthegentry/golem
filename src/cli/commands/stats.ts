@@ -18,7 +18,7 @@ export const statsCommand = new Command('stats')
         process.exit(1);
       }
 
-      const stats = await res.json();
+      const stats = await res.json() as Record<string, number>;
 
       console.log('');
       console.log('L402 Gateway Stats');
@@ -27,6 +27,17 @@ export const statsCommand = new Command('stats')
       console.log(`  Paid requests:      ${stats.paidRequests}`);
       console.log(`  Challenges issued:  ${stats.challengesIssued}`);
       console.log(`  Sats earned:        ${stats.totalSatsEarned}`);
+
+      // Per-rail breakdown (only if fields are present — backward compat)
+      if (stats.lightningPaidRequests !== undefined || stats.arkPaidRequests !== undefined) {
+        console.log('');
+        console.log('  Payment Rails:');
+        console.log(`    Lightning:  ${stats.lightningPaidRequests ?? 0} paid, ${stats.lightningEarned ?? 0} sats`);
+        console.log(`    Ark OOR:    ${stats.arkPaidRequests ?? 0} paid, ${stats.arkEarned ?? 0} sats`);
+        if (stats.arkPendingPayments > 0) {
+          console.log(`    Pending:    ${stats.arkPendingPayments} Ark payments awaiting VTXO`);
+        }
+      }
     } catch (err) {
       if (err instanceof TypeError && (err as any).cause?.code === 'ECONNREFUSED') {
         console.error(`Error: Gateway not running on port ${port}.`);

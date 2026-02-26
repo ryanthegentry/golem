@@ -69,16 +69,27 @@ async function startGateway() {
 
   const rootKeyStore = new MemoryRootKeyStore();
 
+  // Get Ark address for dual-mode
+  let arkAddress: string | undefined;
+  try {
+    arkAddress = await wallet.getAddress();
+  } catch {
+    // No Ark address available
+  }
+
   const gateway = createL402Gateway(lightning, {
     priceSats: 1000,
     rootKeyStore,
     description: 'BreatheLocal API — 1000 sats per request',
-    freePaths: ['/health', '/docs'],
+    freePaths: ['/health', '/docs', '/l402/preimage'],
+    arkAddress,
+    wallet: arkAddress ? wallet.sdkWallet : undefined,
   });
 
   const app = new Hono();
   app.get('/health', (c) => c.json({ status: 'ok' }));
   app.get('/docs', (c) => c.json({ endpoints: ['/v1/aqi'] }));
+  app.get('/l402/preimage', gateway.preimageHandler);
   app.use('/*', gateway.middleware);
   app.all('/*', async (c) => {
     const url = new URL(c.req.url);
@@ -92,7 +103,7 @@ async function startGateway() {
   });
 
   const server = serve({ fetch: app.fetch, port: GATEWAY_PORT, hostname: '0.0.0.0' }, () => {
-    console.log(`[gateway] L402 gateway on :${GATEWAY_PORT} → :${BACKEND_PORT}`);
+    console.log(`[gateway] L402 gateway on :${GATEWAY_PORT} → :${BACKEND_PORT} ${arkAddress ? '(dual-mode)' : '(Lightning only)'}`);
   });
 
   return { server, gateway, rootKeyStore, lightning };
@@ -203,6 +214,60 @@ async function main() {
     assert('Sats earned tracked', gateway.stats.totalSatsEarned >= 1000);
   }
 
+  // --- Test G: Ark OOR payment flow (simulated) ---
+  console.log('\n--- Test G: Ark OOR payment flow ---');
+  {
+    // Request gated path — should get 402 with ark_payment
+    const res = await fetch(`http://localhost:${GATEWAY_PORT}/v1/aqi?lat=45.52&lng=-122.68`);
+    const body = await res.json();
+
+    const hasArkPayment = body.ark_payment && typeof body.ark_payment.payment_id === 'string';
+    assert('402 includes ark_payment', hasArkPayment);
+
+    if (hasArkPayment) {
+      const arkPayment = body.ark_payment;
+      assert('ark_payment has address', typeof arkPayment.address === 'string');
+      assert('ark_payment has amount > price', arkPayment.amount > 1000 && arkPayment.amount <= 1099);
+      assert('ark_payment has macaroon', typeof arkPayment.macaroon === 'string');
+
+      // Simulate OOR fulfillment by directly setting pending.fulfilled
+      const pending = gateway.pendingPayments.get(arkPayment.payment_id);
+      assert('Pending payment exists', !!pending);
+
+      if (pending) {
+        // Before fulfillment: preimage endpoint returns 202
+        const pendingRes = await fetch(`http://localhost:${GATEWAY_PORT}/l402/preimage?payment_id=${arkPayment.payment_id}`);
+        assert('Preimage endpoint returns 202 before fulfillment', pendingRes.status === 202);
+
+        // Simulate VTXO detection
+        pending.fulfilled = true;
+
+        // After fulfillment: preimage endpoint returns 200 with preimage
+        const fulfilledRes = await fetch(`http://localhost:${GATEWAY_PORT}/l402/preimage?payment_id=${arkPayment.payment_id}`);
+        const preimageBody = await fulfilledRes.json();
+        assert('Preimage endpoint returns 200 after fulfillment', fulfilledRes.status === 200);
+        assert('Preimage body has preimage', typeof preimageBody.preimage === 'string');
+        assert('Preimage body has macaroon', typeof preimageBody.macaroon === 'string');
+
+        // Use the Ark macaroon + preimage to access the gated path
+        const authRes = await fetch(`http://localhost:${GATEWAY_PORT}/v1/aqi?lat=45.52&lng=-122.68`, {
+          headers: { 'Authorization': `L402 ${preimageBody.macaroon}:${preimageBody.preimage}` },
+        });
+        const authBody = await authRes.json();
+        assert('Ark L402 token returns 200', authRes.status === 200);
+        assert('Ark L402 returns upstream data', authBody.aqi === 42);
+
+        console.log(`\n  Ark payment verified: ${arkPayment.payment_id.slice(0, 16)}...`);
+      }
+    } else {
+      console.log('  (Ark OOR not available — skipping Ark-specific tests)');
+    }
+
+    // Verify preimage endpoint returns 404 for bogus payment_id
+    const bogusRes = await fetch(`http://localhost:${GATEWAY_PORT}/l402/preimage?payment_id=bogus123`);
+    assert('Preimage endpoint returns 404 for unknown payment', bogusRes.status === 404);
+  }
+
   // --- Summary ---
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 
@@ -214,6 +279,7 @@ async function main() {
   }
 
   // Cleanup
+  gateway.dispose();
   backend.close();
   gw.close();
   await lightning.dispose();
