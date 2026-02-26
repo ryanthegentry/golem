@@ -573,7 +573,7 @@ describe('L402 Security — macaroon-v2', () => {
       const gateway = createL402Gateway(lightning, {
         priceSats: 1000,
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       const c = makeContext('/api/data');
@@ -641,7 +641,7 @@ describe('L402 Security — macaroon-v2', () => {
       const gateway = createL402Gateway(lightning, {
         priceSats: 1000,
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       // Issue a 402 to create a pending payment
@@ -675,7 +675,7 @@ describe('L402 Security — macaroon-v2', () => {
       const gateway = createL402Gateway(lightning, {
         priceSats: 1000,
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       // Issue 402
@@ -706,7 +706,7 @@ describe('L402 Security — macaroon-v2', () => {
         priceSats: 1000,
         ttlSeconds: 1, // 1 second TTL
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       // Issue 402
@@ -731,7 +731,7 @@ describe('L402 Security — macaroon-v2', () => {
       const gateway = createL402Gateway(lightning, {
         priceSats: 1000,
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       // Issue 402
@@ -760,7 +760,7 @@ describe('L402 Security — macaroon-v2', () => {
       const gateway = createL402Gateway(lightning, {
         priceSats: 1000,
         arkAddress: 'tark1qtest...',
-        wallet: { notifyIncomingFunds: async function* () {} },
+        wallet: { notifyIncomingFunds: async () => () => {} },
       });
 
       // Pay with Lightning macaroon

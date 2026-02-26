@@ -34,7 +34,15 @@ export interface PendingArkPayment {
 
 /** Narrow wallet interface — only what the gateway needs for Ark OOR detection. */
 export interface ArkWalletNotifier {
-  notifyIncomingFunds(): AsyncIterable<unknown>;
+  notifyIncomingFunds(callback: (funds: IncomingFundsEvent) => void): Promise<() => void>;
+}
+
+/** Incoming funds event from the Ark SDK's notifyIncomingFunds callback. */
+export interface IncomingFundsEvent {
+  type: 'utxo' | 'vtxo';
+  newVtxos?: Array<{ value: number; [key: string]: unknown }>;
+  spentVtxos?: Array<{ value: number; [key: string]: unknown }>;
+  coins?: Array<{ value: number; [key: string]: unknown }>;
 }
 
 export interface GatewayConfig {
@@ -190,28 +198,25 @@ export function createL402Gateway(
   }
 
   // Start VTXO listener if Ark is enabled
-  let vtxoListenerAbort: AbortController | null = null;
+  let stopVtxoListener: (() => void) | null = null;
   if (arkEnabled && config.wallet) {
-    vtxoListenerAbort = new AbortController();
     const wallet = config.wallet;
     (async () => {
       try {
-        for await (const event of wallet.notifyIncomingFunds()) {
-          if (vtxoListenerAbort?.signal.aborted) break;
-          // Extract amount from the VTXO event
-          const vtxo = event as { amount?: number; value?: number };
-          const amount = vtxo.amount ?? vtxo.value;
-          if (typeof amount === 'number' && amount > 0) {
-            matchIncomingVtxo(amount);
+        stopVtxoListener = await wallet.notifyIncomingFunds((funds) => {
+          if (funds.type === 'vtxo' && funds.newVtxos) {
+            for (const vtxo of funds.newVtxos) {
+              if (typeof vtxo.value === 'number' && vtxo.value > 0) {
+                matchIncomingVtxo(vtxo.value);
+              }
+            }
           }
-        }
+        });
+        console.log(`[l402:ark] VTXO listener started for ${arkAddress}`);
       } catch (err) {
-        if (!vtxoListenerAbort?.signal.aborted) {
-          console.error('[l402:ark] VTXO listener error:', err instanceof Error ? err.message : err);
-        }
+        console.error('[l402:ark] VTXO listener error:', err instanceof Error ? err.message : err);
       }
     })();
-    console.log(`[l402:ark] VTXO listener started for ${arkAddress}`);
   }
 
   // Cleanup expired pending payments every 10s
@@ -375,9 +380,9 @@ export function createL402Gateway(
   };
 
   function dispose() {
-    if (vtxoListenerAbort) {
-      vtxoListenerAbort.abort();
-      vtxoListenerAbort = null;
+    if (stopVtxoListener) {
+      stopVtxoListener();
+      stopVtxoListener = null;
     }
     clearInterval(cleanupInterval);
     console.log('[l402] Gateway disposed');
