@@ -49,19 +49,52 @@ If ASP goes down, users can claim on-chain using pre-signed transaction trees. R
 - Must broadcast within the timelock window
 - All exits target the safe harbor address
 
-## Delegation Primitive
+## Delegation Primitive (Arkade Intents)
 
-**Status:** Live in Ark protocol. Pending enablement in Arkade Money.
+**Status:** Live in arkd v0.7.0+ (Go server). Low-level primitives in published TS SDK. High-level orchestration on unpublished `delegate` branch only.
 
-This is the mechanism that lets the agent refresh VTXOs without the user being online. Master key signs a delegation once; delegated credential handles routine refresh operations.
+Delegation uses **Arkade Intents** — BIP322-style ownership proofs combined with partial forfeit transactions. This is NOT a "present a credential to the ASP" model. The delegate is an active round participant.
 
-**CRITICAL OPEN QUESTION:** See research-priorities.md #1. Delegation scope determines the entire security model.
+### How delegation works
+
+1. **VTXO creation with delegation script:** User creates VTXOs with a 3-path tapscript:
+   - `A+S` (Alice + Server): Normal spending
+   - `A+CSV(exit)`: Alice's unilateral exit after timelock
+   - `A+D+S+CLTV`: Delegation path (Alice + Delegate + Server) with absolute timelock
+
+2. **Provisioning (master key online):** User pre-signs:
+   - **Intent proof:** BIP322-style transaction proving VTXO ownership (`Intent.create()`)
+   - **Partial forfeit TX:** Signed with `SIGHASH_ALL|ANYONECANPAY` (allows delegate to add connector input)
+   - These artifacts are given to the delegate along with VTXO details
+
+3. **Delegated refresh (master key offline):** Delegate:
+   - Submits the pre-signed intent to join the round
+   - Participates in MuSig2 tree signing with its own ephemeral key
+   - Combines Alice's pre-signed tapScriptSig with its own signature on the forfeit TX
+   - Adds a connector input to the forfeit TX and finalizes it
+
+4. **Per-VTXO, per-cycle:** After each round, new VTXOs are created. The master key must come online to provision new intents for the next cycle.
+
+### Delegation scope (confirmed by Ark Labs maintainer, Feb 25)
+
+Delegation is constrained to "refresh to same owner" by design. The owner pre-signs a transaction to themselves — the delegate cannot change the output destination. Compromised delegate = DoS only (failing to refresh), NOT fund theft.
+
+### SDK primitives available (v0.3.13)
+
+| Primitive | Export | Status |
+|-----------|--------|--------|
+| `Intent.create(message, inputs, outputs)` | Yes | Usable |
+| `buildForfeitTx(inputs, pkScript, locktime)` | Yes | Usable |
+| `CLTVMultisigTapscript.encode({absoluteTimelock, pubkeys})` | Yes | Usable |
+| `VtxoScript(scripts)` | Yes | Usable |
+| `combineTapscriptSigs(signedTx, originalTx)` | Yes | Usable |
+| High-level delegation flow | No | Only on unpublished `delegate` branch |
 
 ## Arkade Platform Roadmap (per Ark Labs maintainer, Feb 25, 2026)
 
 | Capability | Status | Timeline |
 |---|---|---|
-| Delegation | Live in protocol, pending Arkade Money enablement | Now |
+| Delegation | Live in arkd v0.7.0+, primitives in TS SDK, orchestration on unpublished branch | Pending |
 | Assets (stablecoins) | Current focus | Mid-March 2026 |
 | Full opcodes | After assets | March-April 2026 |
 | Swaps, lending, Fuji | Written, pending deploy | April-May 2026 |

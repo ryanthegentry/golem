@@ -15,7 +15,8 @@ NEVER in agent memory      Holds delegation cred      Round history
 ```
 
 - Agent NEVER holds master private keys. Not in memory. Not temporarily. Not in logs.
-- Agent DOES hold a minimally-scoped delegation credential for refresh operations only.
+- **Phase 1 (Tier 0):** Agent uses ServerSigner (hot key encrypted on disk). Key IS present — acceptable for small testnet amounts.
+- **Phase 2 (delegation):** Agent holds delegate keypair + user's pre-signed artifacts (intent + partial forfeit). NOT a passive credential — delegate actively participates in rounds. Blocked on SDK orchestration layer.
 - All signing goes through the `GolemSigner` interface. No exceptions.
 - Each user deploys their own agent (Railway template or Docker). NOT a shared cloud service.
 
@@ -56,7 +57,9 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 11 | CLI: init, balance, gateway, stats | DONE |
 | 12 | CLI: golem pay (L402 client) | DONE |
 | 13 | L402 security hardening (V2 macaroons) | DONE |
-| 14 | Railway template with /setup wizard | TODO |
+| 14 | Delegation deep dive + SDK audit | DONE (research) |
+| 15 | lnget wire compatibility validation | DONE |
+| 16 | Railway template with /setup wizard | TODO |
 
 ### L402 Gateway (Feb 25–26, 2026)
 
@@ -109,11 +112,22 @@ Replaced custom JSON-based macaroon implementation with `macaroon` npm package (
 
 **Known limitation — preimage settlement gap:** Between HTLC settlement (preimage revealed) and the Boltz swap completing into the Ark wallet, there's a brief window where the gateway has verified the preimage but the sats haven't arrived as a VTXO. This is a Boltz swap latency issue, not an L402 vulnerability. The preimage proof-of-payment is valid immediately.
 
+### Delegation Research (Feb 26, 2026)
+
+SDK audit found: delegation low-level primitives (`Intent`, `buildForfeitTx`, `CLTVMultisigTapscript`, `combineTapscriptSigs`) ARE in published `@arkade-os/sdk@0.3.13`. High-level delegation orchestration is NOT — only on unpublished `delegate` branch of `arkade-os/ts-sdk`.
+
+Delegation is NOT a credential you present to the ASP. It's pre-signed artifacts (BIP322 intent + partial forfeit TX with `SIGHASH_ALL|ANYONECANPAY`) that the delegate submits and completes during the round. The delegate needs its own keypair and is an active MuSig2 round participant.
+
+Read-only wallet works: `ReadonlySingleKey` + `ReadonlyWallet` gives full balance/VTXO/history with pubkey only.
+
+See `docs/research-priorities.md` #1, #13, #14 for full details.
+
 ### Next Priorities
-1. Safe harbor address registration (Step 8)
-2. Railway template with /setup wizard
-3. Transaction detail view (expand row → full txid, timestamp, type, status)
-4. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
+1. ServerSigner (Tier 0 encrypted hot key for Railway)
+2. Safe harbor address registration
+3. Railway template with /setup wizard
+4. Transaction detail view (expand row → full txid, timestamp, type, status)
+5. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
 
 ### Signer Interface (Define First)
 

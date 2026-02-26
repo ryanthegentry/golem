@@ -25,7 +25,7 @@
 | ASP | Transaction history, VTXO data | Steal funds — user can exit unilaterally |
 | Agent + ASP | Depends on delegation scope | If refresh-to-same-owner: still can't redirect funds |
 
-**WARNING:** This table assumes delegation is scoped to "refresh to same owner." If delegation allows refresh to arbitrary destinations, Agent compromise = fund theft risk. This is research priority #1.
+**CONFIRMED (Feb 25):** Delegation is scoped to "refresh to same owner" by protocol design. The owner pre-signs a transaction to themselves; the delegate cannot change the output destination. Agent compromise = DoS only (failing to refresh), NOT fund theft.
 
 ## Signer Interface
 
@@ -67,11 +67,22 @@ GolemSigner (interface)
 │   ├── LedgerSigner (via HID)
 │   ├── KeystoneSigner (via QR)
 │   └── PassportSigner (via QR/microSD)
-├── DelegationSigner (wraps any signer, uses Ark delegation for refresh)
+├── ServerSigner (Tier 0 — hot key encrypted on disk, AES-256, for Railway/self-hosted)
+├── DelegateIdentity (Phase 2 — active round participant with own keypair + user's pre-signed artifacts)
 └── MockSigner (prototype — keys in memory behind the interface)
 ```
 
-For the PoC: implement `MockSigner` only. Interface boundary must be real.
+For Phase 1: `MockSigner` (testnet) and `ServerSigner` (production Tier 0). Interface boundary is real from day one.
+
+**DelegateIdentity (Phase 2, post-sweep):** NOT a passive credential holder. The delegate is an active round participant that:
+- Holds its own keypair (for MuSig2 tree signing)
+- Stores user's pre-signed intent (BIP322 ownership proof)
+- Stores user's pre-signed tapScriptSig for forfeit TX (`SIGHASH_ALL|ANYONECANPAY`)
+- Combines signatures during the round's forfeit TX signing phase
+- Each VTXO must be created with a delegation tapscript (`A+D+S` with CLTV timelock)
+- Delegation is per-VTXO, per-refresh-cycle — requires periodic reprovisioning by the master key holder
+
+Low-level primitives (`Intent`, `buildForfeitTx`, `CLTVMultisigTapscript`, `combineTapscriptSigs`) exist in the published SDK. High-level delegation orchestration is only on the unpublished `delegate` branch of `arkade-os/ts-sdk`.
 
 ## Tiered Security
 
@@ -110,9 +121,9 @@ User clicks "Deploy on Railway"
 Pattern proven by OpenClaw Railway templates. See: https://railway.com/deploy/openclaw
 
 ### Security for Railway deployment
-- Delegation credential encrypted at rest on Railway volume
+- **Tier 0 (ServerSigner):** Hot key encrypted with AES-256, derived from user password. Key is present for all operations — no delegation needed. Acceptable for small amounts.
+- **Tier 1+ (DelegateIdentity, Phase 2):** Server holds delegate keypair + user's pre-signed artifacts. Master key NEVER touches Railway. User provisions delegation from mobile app.
 - Setup wizard password-protected
-- No master key material touches Railway
 - User can export and migrate to self-hosted Docker
 
 ## Safe Harbor Address
