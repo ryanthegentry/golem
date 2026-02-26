@@ -52,7 +52,23 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 7 | OOR settlement + exposure limits | DONE |
 | 8 | Safe harbor address setup + emergency exit | TODO |
 | 9 | Wallet UI (PWA + API server) | DONE |
-| 10 | Railway template with /setup wizard | TODO |
+| 10 | L402 Lightning-gated reverse proxy | DONE |
+| 11 | Railway template with /setup wizard | TODO |
+
+### L402 Gateway (Feb 25–26, 2026)
+
+L402 reverse proxy backed by Ark via Boltz swaps — no LND required. Verified with real Lightning payment on mutinynet.
+
+**Components:**
+- `src/l402/macaroon.ts` — Zero-dependency L402 macaroon (HMAC-SHA256, caveats). 20 tests.
+- `src/l402/gateway.ts` — Hono middleware: 402 challenges + L402 token verification.
+- `src/l402/gateway-server.ts` — Standalone server with upstream proxy (env-configurable).
+
+**Live test result:** Voltage LND → Boltz reverse swap → Ark wallet. Preimage returned in 1s. Macaroon + preimage verified. Status 200 + upstream data.
+
+**Liquidity setup for testing:** Keysend (LND→faucet for inbound) → submarine swap (Ark→LND for Boltz ARK liquidity) → reverse swap (LND→Ark for L402 payment). All three directions must have liquidity.
+
+**Known issue:** Boltz mutinynet reverse swaps fail with "onchain coins could not be sent" when Boltz has no ARK liquidity. Fixed by priming Boltz via submarine swap first.
 
 ### Next Priorities
 1. Transaction detail view (expand row → full txid, timestamp, type, status)
