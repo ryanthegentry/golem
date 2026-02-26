@@ -16,7 +16,7 @@ import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
 import { MUTINYNET_CONFIG } from '../wallet/config.js';
 import { createL402Gateway } from './gateway.js';
-import { mintL402Macaroon } from './macaroon.js';
+import { mintL402Macaroon, MemoryRootKeyStore } from './macaroon.js';
 
 const BACKEND_PORT = 3099;
 const GATEWAY_PORT = 8499;
@@ -67,11 +67,11 @@ async function startGateway() {
 
   await lightning.startSwapManager();
 
-  const rootKey = randomBytes(32).toString('hex');
+  const rootKeyStore = new MemoryRootKeyStore();
 
   const gateway = createL402Gateway(lightning, {
     priceSats: 1000,
-    rootKey,
+    rootKeyStore,
     description: 'BreatheLocal API — 1000 sats per request',
     freePaths: ['/health', '/docs'],
   });
@@ -95,7 +95,7 @@ async function startGateway() {
     console.log(`[gateway] L402 gateway on :${GATEWAY_PORT} → :${BACKEND_PORT}`);
   });
 
-  return { server, gateway, rootKey, lightning };
+  return { server, gateway, rootKeyStore, lightning };
 }
 
 // --- 3. Run tests ---
@@ -104,7 +104,7 @@ async function main() {
   console.log('=== L402 Gateway E2E Test ===\n');
 
   const backend = startBackend();
-  const { server: gw, gateway, rootKey, lightning } = await startGateway();
+  const { server: gw, gateway, rootKeyStore, lightning } = await startGateway();
 
   await sleep(1000); // Let servers bind
 
@@ -173,12 +173,12 @@ async function main() {
   // --- Test E: Valid L402 token (mock — we control the root key) ---
   console.log('\n--- Test E: Valid L402 token → 200 + upstream data ---');
   {
-    // Create a valid macaroon + preimage pair using the gateway's root key
+    // Create a valid macaroon + preimage pair using the gateway's root key store
     const preimage = randomBytes(32).toString('hex');
     const paymentHash = createHash('sha256')
       .update(Buffer.from(preimage, 'hex'))
       .digest('hex');
-    const macaroon = mintL402Macaroon(rootKey, paymentHash);
+    const { macaroonBase64: macaroon } = mintL402Macaroon(rootKeyStore, { paymentHash });
 
     const res = await fetch(`http://localhost:${GATEWAY_PORT}/v1/aqi?lat=45.52&lng=-122.68`, {
       headers: { 'Authorization': `L402 ${macaroon}:${preimage}` },

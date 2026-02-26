@@ -36,7 +36,7 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 
 **Server startup:** `GOLEM_SIGNER_KEY=<hex> npm start`
 **Ryan's testnet key:** `e0f60aacd061005ae3e59d0540af2caafbcb895212c180c2c1b8813a49d61d1e`
-**Tests:** 93 passing, zero TypeScript errors
+**Tests:** 108 passing, zero TypeScript errors
 **SDK bugs filed:** arkade-os/ts-sdk#310, #311, #312
 
 ### Task Priority
@@ -55,16 +55,18 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 10 | L402 Lightning-gated reverse proxy | DONE |
 | 11 | CLI: init, balance, gateway, stats | DONE |
 | 12 | CLI: golem pay (L402 client) | DONE |
-| 13 | Railway template with /setup wizard | TODO |
+| 13 | L402 security hardening (V2 macaroons) | DONE |
+| 14 | Railway template with /setup wizard | TODO |
 
 ### L402 Gateway (Feb 25–26, 2026)
 
 L402 reverse proxy backed by Ark via Boltz swaps — no LND required. Verified with real Lightning payment on mutinynet.
 
 **Components:**
-- `src/l402/macaroon.ts` — Zero-dependency L402 macaroon (HMAC-SHA256, caveats). 20 tests.
-- `src/l402/gateway.ts` — Hono middleware: 402 challenges + L402 token verification.
-- `src/l402/gateway-server.ts` — Standalone server with upstream proxy (env-configurable).
+- `src/l402/macaroon.ts` — V2 binary macaroons via `macaroon` npm package (Go macaroon library JS port). Per-macaroon root keys via RootKeyStore, time-before caveats, constant-time preimage verification. 35 security tests.
+- `src/l402/macaroon-types.d.ts` — TypeScript declarations for the `macaroon` npm package.
+- `src/l402/gateway.ts` — Hono middleware: 402 challenges + L402 token verification + IP rate limiting.
+- `src/l402/gateway-server.ts` — Standalone server with upstream proxy, FileRootKeyStore, security headers (env-configurable).
 
 **Live test result:** Voltage LND → Boltz reverse swap → Ark wallet. Preimage returned in 1s. Macaroon + preimage verified. Status 200 + upstream data.
 
@@ -87,18 +89,31 @@ Commander.js CLI with `~/.golem/config.json` persistence. Live-validated end-to-
 
 **Usage:** `npm run golem -- <command>` or after build: `npx golem <command>`.
 
-**lnget compatibility:** Protocol flow (402 + WWW-Authenticate header format) is compatible. Macaroon serialization is not — Golem uses JSON-based format, lnget expects libmacaroons v2 binary. Fixable but not a PoC priority.
+**lnget compatibility:** Protocol flow and V2 binary macaroon format are now compatible with lnget/Aperture. Same `macaroon` npm package as LND ecosystem.
 
 ### Credentials
 
 Voltage LND macaroon is read from `VOLTAGE_MACAROON` env var (base64-encoded). Never hardcode in source files.
 
+### L402 Security Hardening (Feb 26, 2026)
+
+Replaced custom JSON-based macaroon implementation with `macaroon` npm package (official JS port of Go macaroon library, same as LND/Aperture).
+
+**Security improvements:**
+- Per-macaroon root keys via RootKeyStore (MemoryRootKeyStore for testing, FileRootKeyStore with 0600 permissions for production)
+- Time-before caveats for replay protection (configurable TTL, default 300s)
+- Constant-time preimage verification via `crypto.timingSafeEqual` (library's SJCL bitArray.equal is NOT constant-time)
+- V2 binary serialization format (lnget/Aperture compatible)
+- IP-based rate limiting on 402 challenge issuance (default 30/min)
+- Security headers (X-Content-Type-Options, X-Frame-Options) on all responses
+
+**Known limitation — preimage settlement gap:** Between HTLC settlement (preimage revealed) and the Boltz swap completing into the Ark wallet, there's a brief window where the gateway has verified the preimage but the sats haven't arrived as a VTXO. This is a Boltz swap latency issue, not an L402 vulnerability. The preimage proof-of-payment is valid immediately.
+
 ### Next Priorities
 1. Safe harbor address registration (Step 8)
 2. Railway template with /setup wizard
-3. lnget compatibility (libmacaroons v2 binary serialization)
-4. Transaction detail view (expand row → full txid, timestamp, type, status)
-5. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
+3. Transaction detail view (expand row → full txid, timestamp, type, status)
+4. Consider: HTTPS via `tailscale cert` for proper PWA + clipboard
 
 ### Signer Interface (Define First)
 

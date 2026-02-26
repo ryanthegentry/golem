@@ -74,10 +74,8 @@ async function main() {
 
   await gatewayLightning.startSwapManager();
 
-  const rootKey = randomBytes(32).toString('hex');
   const gateway = createL402Gateway(gatewayLightning, {
     priceSats: 1000,
-    rootKey,
     description: 'BreatheLocal API — 1000 sats',
     freePaths: ['/health'],
   });

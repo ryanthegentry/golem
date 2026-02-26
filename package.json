@@ -29,6 +29,7 @@
     "@scure/btc-signer": "^2.0.1",
     "commander": "^14.0.3",
     "eventsource": "^4.1.0",
-    "hono": "^4.12.2"
+    "hono": "^4.12.2",
+    "macaroon": "^3.0.4"
   }
 }
