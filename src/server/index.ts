@@ -1,40 +1,40 @@
 // EventSource polyfill — MUST be set before any SDK imports
-import { EventSource } from 'eventsource';
-(globalThis as any).EventSource = EventSource;
+import '../polyfills.js';
 
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { streamSSE } from 'hono/streaming';
-import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../wallet/config.js';
+import { walletConfigFromNetwork } from '../wallet/config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from '../wallet/errors.js';
 import { RefreshAgent } from '../agent/refresh-agent.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
+import { resolveServerSigner } from '../signer/resolve-signer.js';
+import { validateBearerToken } from '../auth/safe-compare.js';
 
 // --- Startup ---
-
-const signerKey = process.env.GOLEM_SIGNER_KEY;
-if (!signerKey) {
-  console.error('GOLEM_SIGNER_KEY env var required (hex-encoded 32-byte secret)');
-  process.exit(1);
-}
 
 const port = parseInt(process.env.PORT || '3000', 10);
 
 console.log('Initializing Golem wallet...');
 
-const signer = MockSigner.fromSecretKey(Buffer.from(signerKey, 'hex'));
-const wallet = await GolemWallet.create(signer, { ...MUTINYNET_CONFIG, dataDir: './data' });
+const signer = await resolveServerSigner().catch((err) => {
+  console.error(`Error: ${(err as Error).message}`);
+  process.exit(1);
+});
+
+const netConfig = getNetworkConfig();
+const walletConfig = walletConfigFromNetwork(netConfig, './data');
+const wallet = await GolemWallet.create(signer, walletConfig);
 
 const eventLog = new EventLog<RefreshEvent>(100);
 const sseClients = new Set<(event: RefreshEvent) => void>();
 
 const agent = new RefreshAgent(wallet, undefined, (event) => {
   eventLog.push(event);
-  console.log(`[agent] ${event.type}`, 'timestamp' in event ? event.timestamp : '');
   for (const send of sseClients) {
     send(event);
   }
@@ -46,6 +46,28 @@ console.log('RefreshAgent started');
 // --- App ---
 
 const app = new Hono();
+
+// Auth middleware — require GOLEM_API_KEY for all /api routes
+const apiKey = process.env.GOLEM_API_KEY;
+if (!apiKey) {
+  console.warn('WARNING: No GOLEM_API_KEY set. Fund-moving endpoints (/api/send, /api/onboard) are blocked.');
+  console.warn('         Set GOLEM_API_KEY env var to enable all API endpoints.');
+}
+
+app.use('/api/*', async (c, next) => {
+  // Fund-moving endpoints require GOLEM_API_KEY — fail-closed when unset
+  const path = new URL(c.req.url).pathname;
+  const requiresAuth = path === '/api/send' || path === '/api/onboard';
+  if (!apiKey && requiresAuth) {
+    return c.json({ error: 'GOLEM_API_KEY required for fund-moving endpoints' }, 403);
+  }
+  if (apiKey) {
+    if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+  }
+  return next();
+});
 
 // API routes
 
@@ -105,9 +127,7 @@ app.post('/api/send', async (c) => {
 
 app.post('/api/onboard', async (c) => {
   try {
-    const txid = await wallet.onboard((event) => {
-      console.log(`[onboard] ${event.type}`);
-    });
+    const txid = await wallet.onboard();
     return c.json({ txid });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -154,8 +174,8 @@ app.get('/api/info', async (c) => {
       wallet.getPublicKey(),
       wallet.getBalance(),
     ]);
-    const percentLimit = Math.floor(balance.total * MUTINYNET_CONFIG.oorLimitFraction);
-    const oorLimit = Math.max(percentLimit, MUTINYNET_CONFIG.oorLimitMinSats);
+    const percentLimit = Math.floor(balance.total * walletConfig.oorLimitFraction);
+    const oorLimit = Math.max(percentLimit, walletConfig.oorLimitMinSats);
     return c.json({
       signerType: signerInfo.type,
       publicKey: Buffer.from(pubkey).toString('hex'),
@@ -171,6 +191,7 @@ app.use('/*', serveStatic({ root: './src/server/public' }));
 
 // --- Start ---
 
-serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
-  console.log(`Golem server running on http://0.0.0.0:${port}`);
+const hostname = process.env.GOLEM_HOST || '127.0.0.1';
+serve({ fetch: app.fetch, port, hostname }, () => {
+  console.log(`Golem server running on http://${hostname}:${port}`);
 });

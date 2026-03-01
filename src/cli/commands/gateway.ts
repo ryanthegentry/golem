@@ -5,12 +5,13 @@
 import { Command } from 'commander';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
-import { BoltzSwapProvider, ArkadeLightning } from '@arkade-os/boltz-swap';
-import { loadConfig } from '../config.js';
-import { createWalletFromConfig } from '../wallet.js';
+import { getWallet, exitWithError } from '../wallet.js';
+import { startRefreshAgent } from '../refresh-setup.js';
 import { createL402Gateway } from '../../l402/gateway.js';
-import { MemoryRootKeyStore } from '../../l402/macaroon.js';
-import { MUTINYNET_LIGHTNING_CONFIG } from '../../lightning/config.js';
+import { createProxyHandler } from '../../l402/proxy.js';
+import { getNetworkConfig } from '../../config/networks.js';
+import { createLightning } from '../../lightning/index.js';
+import { validateBearerToken } from '../../auth/safe-compare.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -23,47 +24,33 @@ export const gatewayCommand = new Command('gateway')
   .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
   .action(async (opts) => {
     if (opts.currency && opts.currency !== 'sats') {
-      console.error('Error: Only sats currency is supported. USD pricing coming soon.');
-      process.exit(1);
+      exitWithError('Only sats currency is supported. USD pricing coming soon.');
     }
 
-    const config = loadConfig();
     const port = parseInt(opts.port, 10);
     const priceSats = parseInt(opts.price, 10);
     const freePaths = opts.freePaths.split(',').map((p: string) => p.trim());
 
     if (isNaN(priceSats) || priceSats <= 0) {
-      console.error('Error: --price must be a positive number of satoshis.');
-      process.exit(1);
+      exitWithError('--price must be a positive number of satoshis.');
     }
 
-    console.log('Connecting to Ark server...');
-    const wallet = await createWalletFromConfig(config);
+    const { wallet, config } = await getWallet();
+    const netConfig = getNetworkConfig(config.network);
+    const lightning = await createLightning(wallet.sdkWallet, netConfig);
 
-    console.log('Starting Lightning swap provider...');
-    const swapProvider = new BoltzSwapProvider({
-      apiUrl: MUTINYNET_LIGHTNING_CONFIG.boltzApiUrl,
-      network: MUTINYNET_LIGHTNING_CONFIG.network,
-      referralId: MUTINYNET_LIGHTNING_CONFIG.referralId,
-    });
-
-    const lightning = new ArkadeLightning({
-      wallet: wallet.sdkWallet,
-      swapProvider,
-      swapManager: { enableAutoActions: true },
-    });
-
-    await lightning.startSwapManager();
-    console.log('SwapManager started');
+    // Start RefreshAgent for VTXO protection
+    // Pass gateway shutdown handle so emergency exit can stop accepting payments
+    const gatewayHandle = { shutdown: () => { /* set below after gateway creation */ } };
+    const { agent } = startRefreshAgent(wallet, config, gatewayHandle);
 
     // Get Ark address for OOR payments
     let arkAddress: string | undefined;
     if (opts.ark !== false) {
       try {
         arkAddress = await wallet.getAddress();
-        console.log(`Ark OOR payments enabled: ${arkAddress}`);
-      } catch (err) {
-        console.warn('Could not get Ark address — Ark OOR payments disabled:', err instanceof Error ? err.message : err);
+      } catch {
+        // Ark address unavailable — gateway runs Lightning-only
       }
     }
 
@@ -76,14 +63,26 @@ export const gatewayCommand = new Command('gateway')
       wallet: arkAddress ? wallet.sdkWallet : undefined,
     });
 
+    // Wire gateway shutdown into the RefreshAgent's emergency exit handle
+    gatewayHandle.shutdown = () => gateway.dispose();
+
     // Build Hono app
     const app = new Hono();
 
     // Free: health check
     app.get('/health', (c) => c.json({ status: 'ok' }));
 
-    // Free: gateway stats
-    app.get('/stats', (c) => c.json(gateway.stats));
+    // Gateway stats — fail-closed: requires GOLEM_API_KEY
+    const apiKey = process.env.GOLEM_API_KEY;
+    app.get('/stats', (c) => {
+      if (!apiKey) {
+        return c.json({ error: 'GOLEM_API_KEY required for /stats' }, 403);
+      }
+      if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
+        return c.json({ error: 'Unauthorized' }, 401);
+      }
+      return c.json(gateway.getStats());
+    });
 
     // Free: preimage endpoint (for Ark OOR payment polling)
     app.get('/l402/preimage', gateway.preimageHandler);
@@ -92,64 +91,38 @@ export const gatewayCommand = new Command('gateway')
     app.use('/*', gateway.middleware);
 
     // Proxy to upstream
-    app.all('/*', async (c) => {
-      const url = new URL(c.req.url);
-      const upstreamTarget = `${opts.upstream}${url.pathname}${url.search}`;
-
-      try {
-        const headers = new Headers();
-        for (const key of ['content-type', 'accept', 'user-agent']) {
-          const val = c.req.header(key);
-          if (val) headers.set(key, val);
-        }
-
-        const res = await fetch(upstreamTarget, {
-          method: c.req.method,
-          headers,
-          body: ['GET', 'HEAD'].includes(c.req.method) ? undefined : await c.req.text(),
-        });
-
-        const body = await res.text();
-        const contentType = res.headers.get('content-type') || 'application/json';
-
-        return new Response(body, {
-          status: res.status,
-          headers: { 'Content-Type': contentType },
-        });
-      } catch (err) {
-        console.error(`[proxy] Failed to reach upstream ${upstreamTarget}:`, err instanceof Error ? err.message : err);
-        return c.json({ error: 'Upstream unavailable' }, 502);
-      }
-    });
+    app.all('/*', createProxyHandler(opts.upstream));
 
     // Start server with EADDRINUSE handling
     const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
       console.log('');
-      console.log(`L402 gateway running! ${arkAddress ? '(dual-mode: Lightning + Ark)' : '(Lightning only)'}`);
       console.log('');
       console.log(`  URL:        http://0.0.0.0:${port}`);
       console.log(`  Upstream:   ${opts.upstream}`);
       console.log(`  Price:      ${priceSats} sats/request`);
       console.log(`  Free paths: ${freePaths.join(', ')}`);
       console.log(`  Network:    ${config.network}`);
+      console.log(`  Lightning:  enabled (Boltz reverse swap, invoice generated per-request)`);
       if (arkAddress) {
-        console.log(`  Ark addr:   ${arkAddress}`);
+        console.log(`  Ark OOR:    enabled (${arkAddress})`);
+      } else {
+        console.log(`  Ark OOR:    disabled (--no-ark)`);
       }
+      console.log(`  Refresh:    ${agent.isRunning ? 'running' : 'stopped'} (${config.safeHarborAddress ? 'emergency exit enabled' : 'no safe harbor'})`);
       console.log('');
       console.log('Press Ctrl+C to stop.');
     });
 
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        console.error(`Error: Port ${port} already in use. Is another gateway running?`);
-        process.exit(1);
+        exitWithError(`Port ${port} already in use. Is another gateway running?`);
       }
       throw err;
     });
 
     // Clean shutdown
     process.on('SIGINT', () => {
-      console.log('\nShutting down...');
+      agent.stop();
       gateway.dispose();
       server.close();
       process.exit(0);
