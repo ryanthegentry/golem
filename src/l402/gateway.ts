@@ -21,6 +21,7 @@ import {
   MemoryRootKeyStore,
   type RootKeyStore,
 } from './macaroon.js';
+import { InvoiceLimiter } from './invoice-limiter.js';
 
 interface PendingArkPayment {
   paymentId: string;
@@ -169,6 +170,9 @@ export function createL402Gateway(
   // Exempt /l402/preimage from rate limiting — consumers poll it every 500ms
   const rateLimiter = new RateLimiter(config.rateLimitPerMinute ?? 30, ['/l402/preimage']);
 
+  // Cap pending unpaid invoices to prevent resource exhaustion
+  const invoiceLimiter = new InvoiceLimiter();
+
   const pendingPayments = new Map<string, PendingArkPayment>();
 
   const stats: GatewayStats = {
@@ -256,6 +260,9 @@ export function createL402Gateway(
       if (parsed) {
         const result = verifyL402Token(rootKeyStore, parsed.macaroon, parsed.preimage);
         if (result.valid) {
+          // Remove from pending invoice limiter
+          if (result.paymentHash) invoiceLimiter.markPaid(result.paymentHash);
+
           stats.paidRequests++;
           stats.totalSatsEarned += priceSats;
 
@@ -293,7 +300,21 @@ export function createL402Gateway(
       return c.json({ error: 'Too many requests' }, 429);
     }
 
-    // Issue 402 challenge
+    // Issue 402 challenge — reuse oldest pending invoice if at limit
+    const existing = invoiceLimiter.getOrNull();
+    if (existing) {
+      stats.challengesIssued++;
+      const challenge = formatL402Challenge(existing.macaroonBase64, existing.invoice);
+      return c.json({
+        error: 'Payment Required',
+        description,
+        price: priceSats,
+        invoice: existing.invoice,
+        macaroon: existing.macaroonBase64,
+        paymentHash: existing.paymentHash,
+      }, 402, { 'WWW-Authenticate': challenge });
+    }
+
     try {
       const invoiceResult = await lightning.createLightningInvoice({ amount: priceSats });
       const { macaroonBase64, paymentHash } = mintL402Macaroon(rootKeyStore, {
@@ -303,6 +324,15 @@ export function createL402Gateway(
         caveats,
       });
       const challenge = formatL402Challenge(macaroonBase64, invoiceResult.invoice);
+
+      // Track pending invoice for rate limiting
+      invoiceLimiter.add({
+        invoice: invoiceResult.invoice,
+        paymentHash,
+        macaroonBase64,
+        priceSats,
+        createdAt: Date.now(),
+      });
 
       stats.challengesIssued++;
 
