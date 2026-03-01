@@ -45,10 +45,12 @@ export function createInternalApi(config: InternalApiConfig): Hono {
   // Security headers on all responses
   app.use('*', secureHeaders());
 
-  // API key auth — fail-closed: POST endpoints require GOLEM_API_KEY
+  // API key auth — fail-closed: POST endpoints require GOLEM_API_KEY.
+  // GET endpoints (/l402/status, /admin/health) are intentionally unauthenticated:
+  // they serve as health checks for monitoring and the server binds to 127.0.0.1
+  // by default, so only local processes can reach them.
   const key = config.apiKey;
   app.use('*', async (c, next) => {
-    // GET /l402/status is a health check — allow without auth
     if (c.req.method === 'GET') return next();
     if (!key) {
       return c.json({ error: 'GOLEM_API_KEY required for POST endpoints' }, 403);
