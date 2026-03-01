@@ -9,14 +9,16 @@
 import { EventSource } from 'eventsource';
 (globalThis as any).EventSource = EventSource;
 
-import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { ArkadeLightning, BoltzSwapProvider } from '@arkade-os/boltz-swap';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../wallet/config.js';
+import { walletConfigFromNetwork } from '../wallet/config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { createL402Gateway } from './gateway.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 const BACKEND_PORT = 3098;
 const GATEWAY_PORT = 8498;
@@ -50,7 +52,6 @@ async function main() {
   }));
 
   const backend = serve({ fetch: backendApp.fetch, port: BACKEND_PORT, hostname: '0.0.0.0' }, () => {
-    console.log(`[backend] Mock API on :${BACKEND_PORT}`);
   });
 
   // --- 2. Start gateway with FRESH receiving wallet ---
@@ -95,7 +96,6 @@ async function main() {
   });
 
   const gw = serve({ fetch: gwApp.fetch, port: GATEWAY_PORT, hostname: '0.0.0.0' }, () => {
-    console.log(`[gateway] L402 gateway on :${GATEWAY_PORT} → :${BACKEND_PORT}`);
   });
 
   console.log(`  Gateway init: ${elapsed(tGatewayInit)}`);

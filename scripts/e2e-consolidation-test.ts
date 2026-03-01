@@ -18,7 +18,10 @@ import { EventSource } from 'eventsource';
 
 import { MockSigner } from '../src/signer/mock-signer.js';
 import { GolemWallet } from '../src/wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../src/wallet/config.js';
+import { walletConfigFromNetwork } from '../src/wallet/config.js';
+import { getNetworkConfig } from '../src/config/networks.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
@@ -77,9 +80,7 @@ async function main() {
   await waitForConfirmation(fundTxid1);
 
   console.log('  Boarding into Ark...');
-  const boardTxid1 = await wallet.settle(undefined, (event) => {
-    console.log(`  [settle] ${event.type}`);
-  });
+  const boardTxid1 = await wallet.settle(undefined);
   console.log(`  Commitment txid: ${boardTxid1}`);
 
   // Step 3: Check state after first board
@@ -97,9 +98,7 @@ async function main() {
   await waitForConfirmation(fundTxid2);
 
   console.log('  Boarding into Ark...');
-  const boardTxid2 = await wallet.settle(undefined, (event) => {
-    console.log(`  [settle] ${event.type}`);
-  });
+  const boardTxid2 = await wallet.settle(undefined);
   console.log(`  Commitment txid: ${boardTxid2}`);
 
   // Step 5: Verify fragmentation
@@ -125,9 +124,7 @@ async function main() {
   // Step 6: Consolidate
   console.log('\n5. Consolidating VTXOs...');
   try {
-    const consTxid = await wallet.consolidateVtxos(spendablePre, (event) => {
-      console.log(`  [consolidate] ${event.type}`);
-    });
+    const consTxid = await wallet.consolidateVtxos(spendablePre);
     console.log(`  Consolidation txid: ${consTxid}`);
   } catch (err) {
     console.error('\n  CONSOLIDATION FAILED:', err);

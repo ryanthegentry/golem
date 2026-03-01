@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { schnorr, verifyAsync, etc } from '@noble/secp256k1';
-import { pubSchnorr } from '@scure/btc-signer/utils.js';
 import { Transaction, p2tr } from '@scure/btc-signer';
-import { hex } from '@scure/base';
 import { MockSigner } from './mock-signer.js';
 
 /** Create a minimal P2TR PSBT that can be signed by the given key */

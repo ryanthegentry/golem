@@ -4,8 +4,8 @@ import type { RefreshEvent } from './refresh-agent.js';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 
 /** Helper to build a fake VTXO with a given value and state */
-function fakeVtxo(value: number, state: 'settled' | 'preconfirmed' | 'spent' = 'settled') {
-  return { txid: `tx-${value}`, vout: 0, value, virtualStatus: { state } };
+function fakeVtxo(value: number, state: 'settled' | 'preconfirmed' | 'spent' = 'settled', batchExpiry?: number) {
+  return { txid: `tx-${value}`, vout: 0, value, virtualStatus: { state, batchExpiry: batchExpiry ?? 0 } };
 }
 
 function createMockWallet(overrides: Partial<GolemWallet> = {}): GolemWallet {
@@ -18,7 +18,7 @@ function createMockWallet(overrides: Partial<GolemWallet> = {}): GolemWallet {
   } as unknown as GolemWallet;
 }
 
-const BASE_CONFIG = { pollIntervalMs: 1000, safetyMarginMs: 60_000, maxVtxoCount: 10, dustThresholdSats: 1000 };
+const BASE_CONFIG = { pollIntervalMs: 1000, safetyMarginMs: 60_000, maxVtxoCount: 10, dustThresholdSats: 1000, safeHarborExitThresholdBlocks: 432 };
 
 describe('RefreshAgent', () => {
   beforeEach(() => {
@@ -64,6 +64,57 @@ describe('RefreshAgent', () => {
       expect(check.expiringCount).toBe(0);
       expect(check.vtxoCount).toBe(3);
       expect(check.dustCount).toBe(2); // 500 and 200 are < 1000
+      expect(check.nearestExpiryMs).toBeNull(); // no batchExpiry set
+      expect(check.totalBalanceSats).toBe(5700); // 5000 + 500 + 200
+    }
+  });
+
+  it('emits check event with nearestExpiryMs from VTXO batch expiry', async () => {
+    const now = Date.now();
+    // One VTXO expires in 2 days (ms), another in 5 days (ms)
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+    const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+    const vtxos = [
+      fakeVtxo(10000, 'settled', now + fiveDaysMs),
+      fakeVtxo(20000, 'settled', now + twoDaysMs),
+    ];
+    const wallet = createMockWallet({ getVtxos: vi.fn().mockResolvedValue(vtxos) });
+    const events: RefreshEvent[] = [];
+    const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e));
+
+    await agent.tick();
+
+    const check = events.find(e => e.type === 'check');
+    expect(check).toBeTruthy();
+    if (check?.type === 'check') {
+      // nearestExpiryMs should be close to 2 days (allow 1s tolerance for test execution)
+      expect(check.nearestExpiryMs).not.toBeNull();
+      expect(check.nearestExpiryMs!).toBeGreaterThan(twoDaysMs - 1000);
+      expect(check.nearestExpiryMs!).toBeLessThanOrEqual(twoDaysMs);
+      expect(check.totalBalanceSats).toBe(30000); // 10000 + 20000
+    }
+  });
+
+  it('emits check event with nearestExpiryMs converted from seconds-based expiry', async () => {
+    const now = Date.now();
+    // Simulate a seconds-based expiry (value < 1e12, treated as seconds)
+    const threeDaysSec = 3 * 24 * 60 * 60;
+    const expiryInSeconds = Math.floor(now / 1000) + threeDaysSec;
+    const vtxos = [fakeVtxo(5000, 'settled', expiryInSeconds)];
+    const wallet = createMockWallet({ getVtxos: vi.fn().mockResolvedValue(vtxos) });
+    const events: RefreshEvent[] = [];
+    const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e));
+
+    await agent.tick();
+
+    const check = events.find(e => e.type === 'check');
+    expect(check).toBeTruthy();
+    if (check?.type === 'check') {
+      const threeDaysMs = threeDaysSec * 1000;
+      expect(check.nearestExpiryMs).not.toBeNull();
+      // Allow 1s tolerance
+      expect(check.nearestExpiryMs!).toBeGreaterThan(threeDaysMs - 1000);
+      expect(check.nearestExpiryMs!).toBeLessThanOrEqual(threeDaysMs);
     }
   });
 
@@ -274,7 +325,7 @@ describe('RefreshAgent', () => {
       }
     });
 
-    it('emits refresh_error when consolidation fails', async () => {
+    it('emits consolidation_error when consolidation fails', async () => {
       const vtxos = Array.from({ length: 12 }, (_, i) => fakeVtxo(5000 + i));
       const wallet = createMockWallet({
         getVtxos: vi.fn().mockResolvedValue(vtxos),
@@ -286,9 +337,9 @@ describe('RefreshAgent', () => {
       await agent.tick();
 
       const types = events.map(e => e.type);
-      expect(types).toEqual(['check', 'consolidation_start', 'refresh_error']);
-      const err = events.find(e => e.type === 'refresh_error');
-      if (err?.type === 'refresh_error') {
+      expect(types).toEqual(['check', 'consolidation_start', 'consolidation_error']);
+      const err = events.find(e => e.type === 'consolidation_error');
+      if (err?.type === 'consolidation_error') {
         expect(err.error).toBe('settle rejected');
       }
     });

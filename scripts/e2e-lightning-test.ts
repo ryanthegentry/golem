@@ -14,9 +14,14 @@ import { EventSource } from 'eventsource';
 
 import { MockSigner } from '../src/signer/mock-signer.js';
 import { GolemWallet } from '../src/wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../src/wallet/config.js';
+import { walletConfigFromNetwork } from '../src/wallet/config.js';
+import { lightningConfigFromNetwork } from '../src/lightning/config.js';
+import { getNetworkConfig } from '../src/config/networks.js';
 import { GolemLightning } from '../src/lightning/golem-lightning.js';
-import { MUTINYNET_LIGHTNING_CONFIG } from '../src/lightning/config.js';
+
+const mutinynetConfig = getNetworkConfig('mutinynet');
+const MUTINYNET_CONFIG = walletConfigFromNetwork(mutinynetConfig);
+const MUTINYNET_LIGHTNING_CONFIG = lightningConfigFromNetwork(mutinynetConfig);
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
@@ -74,9 +79,7 @@ async function main() {
 
   // Step 3: Board into Ark
   console.log('\n3. Boarding into Ark...');
-  const boardTxid = await wallet.settle(undefined, (event) => {
-    console.log(`  [settle] ${event.type}`);
-  });
+  const boardTxid = await wallet.settle(undefined);
   console.log(`  Commitment txid: ${boardTxid}`);
 
   // Step 4: Verify Ark balance

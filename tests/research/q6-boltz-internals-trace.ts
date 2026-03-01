@@ -20,19 +20,9 @@ function createTracingProxy<T extends object>(target: T, name: string): T {
       const value = obj[prop];
       if (typeof value === 'function') {
         return function (...args: any[]) {
-          console.log(`   [TRACE] ${name}.${prop}() called`);
           const result = value.apply(obj, args);
           if (result && typeof result.then === 'function') {
-            return result.then((v: any) => {
-              if (v instanceof Uint8Array) {
-                console.log(`   [TRACE] ${name}.${prop}() returned: ${Buffer.from(v).toString('hex').slice(0, 20)}...`);
-              } else if (typeof v === 'string') {
-                console.log(`   [TRACE] ${name}.${prop}() returned: ${v.slice(0, 40)}...`);
-              } else {
-                console.log(`   [TRACE] ${name}.${prop}() returned: ${typeof v}`);
-              }
-              return v;
-            });
+            return result;
           }
           return result;
         };

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from './golem-wallet.js';
-import { MUTINYNET_CONFIG } from './config.js';
+import { walletConfigFromNetwork } from './config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 /**
  * OOR limit enforcement tests.
