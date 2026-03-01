@@ -66,6 +66,8 @@ interface GatewayConfig {
   arkAddress?: string;
   /** Wallet for Ark OOR VTXO detection. Required if arkAddress is set. */
   wallet?: ArkWalletNotifier;
+  /** Called after a successful L402 payment verification. */
+  onPayment?: (rail: 'lightning' | 'ark', sats: number, paymentHash: string) => void;
 }
 
 interface GatewayStats {
@@ -270,6 +272,7 @@ export function createL402Gateway(
           const arkPayment = result.paymentHash
             ? [...pendingPayments.values()].find(p => p.paymentHash === result.paymentHash)
             : null;
+          const rail: 'lightning' | 'ark' = arkPayment ? 'ark' : 'lightning';
           if (arkPayment) {
             stats.arkPaidRequests++;
             stats.arkEarned += priceSats;
@@ -277,6 +280,12 @@ export function createL402Gateway(
             stats.lightningPaidRequests++;
             stats.lightningEarned += priceSats;
           }
+
+          // Notify payment callback (for Telegram bot, etc.)
+          if (config.onPayment && result.paymentHash) {
+            try { config.onPayment(rail, priceSats, result.paymentHash); } catch { /* never crash on callback */ }
+          }
+
           return next();
         }
       }
