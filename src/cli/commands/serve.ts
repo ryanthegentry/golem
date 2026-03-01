@@ -16,6 +16,8 @@ import { createLightning } from '../../lightning/index.js';
 import { FileRootKeyStore } from '../../l402/macaroon.js';
 import { MacaroonStore } from '../../l402/macaroon-store.js';
 import { createInternalApi } from '../../l402/internal-api.js';
+import { loadAlertConfig } from '../../monitoring/alerts.js';
+import { TelegramBot } from '../../telegram/bot.js';
 
 export const serveCommand = new Command('serve')
   .description('Start the internal L402 API (for 402index integration)')
@@ -32,7 +34,7 @@ export const serveCommand = new Command('serve')
     const lightning = await createLightning(wallet.sdkWallet, netConfig);
 
     // Start RefreshAgent for VTXO protection
-    const { agent, alertManager } = startRefreshAgent(wallet, config);
+    const { agent, alertManager, eventLog } = startRefreshAgent(wallet, config);
 
     // Initialize stores
     const rootKeyStore = new FileRootKeyStore(dataDir);
@@ -80,12 +82,31 @@ export const serveCommand = new Command('serve')
       throw err;
     });
 
+    // Start Telegram dashboard bot (if configured)
+    let bot: TelegramBot | null = null;
+    const alertConfig = loadAlertConfig();
+    if (alertConfig) {
+      bot = new TelegramBot(
+        { botToken: alertConfig.telegramBotToken, chatId: alertConfig.telegramChatId },
+        {
+          wallet,
+          getAgentStatus: () => ({ running: agent.isRunning, lastEvent: eventLog.getLast() }),
+          getGatewayStats: null,
+          getEventLog: () => eventLog,
+          networkConfig: netConfig,
+        },
+      );
+      bot.setLastAlertTime(alertManager.lastAlertTime);
+      bot.start();
+    }
+
     // Graceful shutdown
     let shuttingDown = false;
     const shutdown = async () => {
       if (shuttingDown) return;
       shuttingDown = true;
 
+      bot?.stop();
       agent.stop();
 
       // Wait for pending Boltz swaps (up to 30 seconds)

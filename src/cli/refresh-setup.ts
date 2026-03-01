@@ -10,12 +10,14 @@
 import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { AlertManager, loadAlertConfig, checkVtxoExpiry, checkBalance } from '../monitoring/alerts.js';
+import { EventLog } from '../server/event-log.js';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 import type { GolemConfig } from './config.js';
 
 interface RefreshSetup {
   agent: RefreshAgent;
   alertManager: AlertManager;
+  eventLog: EventLog<RefreshEvent>;
 }
 
 /**
@@ -32,6 +34,7 @@ export function startRefreshAgent(
 ): RefreshSetup {
   const alertConfig = loadAlertConfig();
   const alertManager = new AlertManager(alertConfig);
+  const eventLog = new EventLog<RefreshEvent>();
 
   const refreshConfig = {
     ...DEFAULT_REFRESH_CONFIG,
@@ -41,12 +44,13 @@ export function startRefreshAgent(
 
   const agent = new RefreshAgent(wallet, refreshConfig, (event: RefreshEvent) => {
     logRefreshEvent(event);
+    eventLog.push(event);
     void handleAlerts(event, alertManager);
   }, gateway);
 
   agent.start();
 
-  return { agent, alertManager };
+  return { agent, alertManager, eventLog };
 }
 
 function logRefreshEvent(event: RefreshEvent): void {

@@ -13,6 +13,8 @@ import { getNetworkConfig } from '../../config/networks.js';
 import { createLightning } from '../../lightning/index.js';
 import { validateBearerToken } from '../../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
+import { loadAlertConfig } from '../../monitoring/alerts.js';
+import { TelegramBot } from '../../telegram/bot.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -49,7 +51,7 @@ export const gatewayCommand = new Command('gateway')
     // Start RefreshAgent for VTXO protection
     // Pass gateway shutdown handle so emergency exit can stop accepting payments
     const gatewayHandle = { shutdown: () => { /* set below after gateway creation */ } };
-    const { agent } = startRefreshAgent(wallet, config, gatewayHandle);
+    const { agent, alertManager, eventLog } = startRefreshAgent(wallet, config, gatewayHandle);
 
     // Get Ark address for OOR payments
     let arkAddress: string | undefined;
@@ -61,6 +63,10 @@ export const gatewayCommand = new Command('gateway')
       }
     }
 
+    // Start Telegram dashboard bot (if configured)
+    let bot: TelegramBot | null = null;
+    const alertConfig = loadAlertConfig();
+
     // Create L402 gateway (dual-mode if Ark address available)
     const gateway = createL402Gateway(lightning, {
       priceSats,
@@ -68,10 +74,28 @@ export const gatewayCommand = new Command('gateway')
       freePaths: [...freePaths, '/l402/preimage'],
       arkAddress,
       wallet: arkAddress ? wallet.sdkWallet : undefined,
+      onPayment: (rail, sats, paymentHash) => {
+        void bot?.notifyPayment(rail, sats, paymentHash);
+      },
     });
 
     // Wire gateway shutdown into the RefreshAgent's emergency exit handle
     gatewayHandle.shutdown = () => gateway.dispose();
+
+    if (alertConfig) {
+      bot = new TelegramBot(
+        { botToken: alertConfig.telegramBotToken, chatId: alertConfig.telegramChatId },
+        {
+          wallet,
+          getAgentStatus: () => ({ running: agent.isRunning, lastEvent: eventLog.getLast() }),
+          getGatewayStats: () => gateway.getStats(),
+          getEventLog: () => eventLog,
+          networkConfig: netConfig,
+        },
+      );
+      bot.setLastAlertTime(alertManager.lastAlertTime);
+      bot.start();
+    }
 
     // Build Hono app
     const app = new Hono();
@@ -132,6 +156,7 @@ export const gatewayCommand = new Command('gateway')
 
     // Clean shutdown
     process.on('SIGINT', () => {
+      bot?.stop();
       agent.stop();
       gateway.dispose();
       server.close();
