@@ -40,7 +40,7 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 
 **Server startup:** `GOLEM_SIGNER_KEY=<hex> npm start`
 **Ryan's testnet key:** `fixture`
-**Tests:** 268 passing, zero TypeScript errors
+**Tests:** 336 passing, zero TypeScript errors
 **SDK bugs filed:** arkade-os/ts-sdk#310, #311, #312
 
 ### Task Priority
@@ -66,12 +66,14 @@ End-to-end test completed on mutinynet: faucet → on-chain receive → board in
 | 17 | Environment-based network switching | DONE |
 | 18 | Time-based macaroon caveats + SQLite store | DONE |
 | 19 | L402 internal API (402index contract) | DONE |
-| 20 | Pre-mainnet test suite | DONE |
+| 20 | Pre-mainnet test suite + mainnet smoke test | DONE |
 | 21 | Monitoring + Telegram alerts | DONE |
 | 22 | Hardening (rate limits, sweep, graceful shutdown) | DONE |
+| 22.5 | Telegram dashboard bot (interactive commands) | DONE |
 | 23 | Railway template with /setup wizard | TODO |
 | 24 | Covenant claim daemon (Phase 1.5) | TODO (gated on Arkade opcodes, March 2026) |
-| 25 | Golem Service Directory (L402 API registry) | TODO |
+| 25 | `golem directory search` + `golem directory list` CLI commands | DONE |
+| 26 | 402Index.io — L402 service directory (separate repo: ~/projects/402index/) | DONE (live) |
 
 ### L402 Gateway (Feb 25–26, 2026)
 
@@ -92,9 +94,7 @@ Dual-mode L402 reverse proxy backed by Ark — no LND required. Two payment rail
 
 **Known issue:** Boltz mutinynet reverse swaps fail with "onchain coins could not be sent" when Boltz has no ARK liquidity. Fixed by priming Boltz via submarine swap first.
 
-**Service Directory:** `golem gateway` auto-registers in the Golem Service Directory on startup.
-Agents in `--agent-mode` auto-discover and auto-pay directory-listed services. CLI: `golem directory search`.
-Phase 1 = centralized (Golem-operated). Phase 3 = decentralized (Nostr federation).
+**Service Directory:** 402Index.io (live, separate repo: ~/projects/402index/). Public REST API at https://402index.io/api/v1/services. CLI commands `golem directory search` and `golem directory list` query it directly (no auth required).
 
 ### Golem CLI (Feb 26, 2026)
 
@@ -109,10 +109,10 @@ Commander.js CLI with `~/.golem/config.json` persistence. Live-validated end-to-
 - `golem safe-harbor` — Show/update safe harbor address. `--set <address>`.
 - `golem exit` — Manual emergency exit to safe harbor. Requires "exit" confirmation.
 - `golem reserve` — On-chain reserve status (required for unilateral exit).
-- `golem directory search <query>` — Search L402 API registry. `--category`, `--max-price`. (planned)
-- `golem directory list` — List registered services. (planned)
+- `golem directory search <query>` — Search 402Index.io. `--category`, `--protocol`, `--max-price`, `--healthy-only`, `--json`.
+- `golem directory list` — List all services from 402Index.io. `--protocol`, `--healthy-only`, `--all`, `--json`.
 
-**Files:** `src/cli/index.ts` (entry), `src/cli/config.ts`, `src/cli/wallet.ts` (shared init), `src/cli/commands/{init,balance,gateway,stats,pay,safe-harbor,exit,reserve}.ts`, `src/cli/cli.test.ts` (9 tests).
+**Files:** `src/cli/index.ts` (entry), `src/cli/config.ts`, `src/cli/wallet.ts` (shared init), `src/cli/commands/{init,balance,gateway,stats,pay,safe-harbor,exit,reserve,directory}.ts`, `src/directory/client.ts` (402Index API client), `src/cli/cli.test.ts`.
 
 **Usage:** `npm run golem -- <command>` or after build: `npx golem <command>`.
 
@@ -191,10 +191,19 @@ See `docs/research-priorities.md` for full details.
 - `src/cli/commands/sweep.ts` — sweep excess to safe harbor
 - `docs/mainnet-smoke-test.md` — manual smoke test procedure
 
+### Telegram Dashboard Bot (Feb 28, 2026)
+
+Interactive read-only bot with 5 commands (`/status`, `/txs`, `/vtxos`, `/health`, `/gateway`) and real-time L402 payment notifications. Activates when `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set (same env vars as alerts). Long-polling with chat ID allowlist.
+
+**Offset tracking:** Drains stale updates on startup (`offset: -1`), deduplicates by `update_id` Set, `Math.max` ensures offset only advances forward. `onPayment` callback on `GatewayConfig` pushes payment notifications to the chat.
+
+**Files:** `src/telegram/bot.ts`, `src/telegram/formatter.ts`, `src/telegram/types.ts`, `src/telegram/commands/*.ts`
+
+**Wired into:** `golem serve` and `golem gateway` (auto-starts if env vars present). `src/cli/refresh-setup.ts` now returns `eventLog: EventLog<RefreshEvent>` for bot context.
+
 ### Next Priorities
 1. Railway template with /setup wizard
-2. Golem Service Directory (L402 API registry — agent discoverability)
-3. Covenant claim daemon (Phase 1.5, gated on Arkade opcodes)
+2. Covenant claim daemon (Phase 1.5, gated on Arkade opcodes)
 
 ### Signer Interface (Define First)
 

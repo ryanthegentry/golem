@@ -31,6 +31,7 @@ import { reserveCommand } from './commands/reserve.js';
 import { serveCommand } from './commands/serve.js';
 import { sweepCommand } from './commands/sweep.js';
 import { receiveCommand } from './commands/receive.js';
+import { directoryCommand } from './commands/directory.js';
 
 const program = new Command()
   .name('golem')
@@ -48,5 +49,6 @@ program.addCommand(reserveCommand);
 program.addCommand(serveCommand);
 program.addCommand(sweepCommand);
 program.addCommand(receiveCommand);
+program.addCommand(directoryCommand);
 
 program.parse();
