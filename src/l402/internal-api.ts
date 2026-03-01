@@ -23,6 +23,7 @@ import type { NetworkConfig } from '../config/networks.js';
 import type { AlertManager } from '../monitoring/alerts.js';
 import { getNearestExpiryMs, toExpiryInput } from '../agent/expiry.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
+import { secureHeaders } from 'hono/secure-headers';
 
 interface InternalApiConfig {
   lightning: ArkadeLightning;
@@ -40,6 +41,9 @@ interface InternalApiConfig {
 export function createInternalApi(config: InternalApiConfig): Hono {
   const { lightning, wallet, rootKeyStore, macaroonStore, networkConfig, startTime } = config;
   const app = new Hono();
+
+  // Security headers on all responses
+  app.use('*', secureHeaders());
 
   // API key auth — fail-closed: POST endpoints require GOLEM_API_KEY
   const key = config.apiKey;

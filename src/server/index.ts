@@ -14,6 +14,7 @@ import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
+import { secureHeaders } from 'hono/secure-headers';
 
 // --- Startup ---
 
@@ -46,6 +47,9 @@ console.log('RefreshAgent started');
 // --- App ---
 
 const app = new Hono();
+
+// Security headers on all responses
+app.use('*', secureHeaders());
 
 // Auth middleware — require GOLEM_API_KEY for all /api routes
 const apiKey = process.env.GOLEM_API_KEY;

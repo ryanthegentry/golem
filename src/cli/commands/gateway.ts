@@ -12,6 +12,7 @@ import { createProxyHandler } from '../../l402/proxy.js';
 import { getNetworkConfig } from '../../config/networks.js';
 import { createLightning } from '../../lightning/index.js';
 import { validateBearerToken } from '../../auth/safe-compare.js';
+import { secureHeaders } from 'hono/secure-headers';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -74,6 +75,9 @@ export const gatewayCommand = new Command('gateway')
 
     // Build Hono app
     const app = new Hono();
+
+    // Security headers on all responses
+    app.use('*', secureHeaders());
 
     // Free: health check
     app.get('/health', (c) => c.json({ status: 'ok' }));

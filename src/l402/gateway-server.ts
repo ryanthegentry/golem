@@ -12,6 +12,7 @@ import { createProxyHandler } from './proxy.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
 import { createLightning } from '../lightning/index.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
+import { secureHeaders } from 'hono/secure-headers';
 
 // --- Config from env ---
 
@@ -75,11 +76,7 @@ const gateway = createL402Gateway(lightning, {
 const app = new Hono();
 
 // Security headers on all responses
-app.use('*', async (c, next) => {
-  await next();
-  c.header('X-Content-Type-Options', 'nosniff');
-  c.header('X-Frame-Options', 'DENY');
-});
+app.use('*', secureHeaders());
 
 // Free: health check
 app.get('/health', (c) => c.json({ status: 'ok' }));
