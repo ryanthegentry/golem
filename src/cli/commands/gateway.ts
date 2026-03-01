@@ -22,6 +22,7 @@ export const gatewayCommand = new Command('gateway')
   .option('--description <text>', 'Description shown in 402 responses')
   .option('--free-paths <paths>', 'Comma-separated paths that skip payment', '/health,/stats')
   .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
+  .option('--trusted-proxy', 'Trust x-forwarded-for/x-real-ip headers for rate limiting (set when behind a reverse proxy)')
   .action(async (opts) => {
     if (opts.currency && opts.currency !== 'sats') {
       exitWithError('Only sats currency is supported. USD pricing coming soon.');
@@ -30,6 +31,11 @@ export const gatewayCommand = new Command('gateway')
     const port = parseInt(opts.port, 10);
     const priceSats = parseInt(opts.price, 10);
     const freePaths = opts.freePaths.split(',').map((p: string) => p.trim());
+
+    // Set GOLEM_TRUSTED_PROXY so the gateway rate limiter reads x-forwarded-for
+    if (opts.trustedProxy) {
+      process.env.GOLEM_TRUSTED_PROXY = '1';
+    }
 
     if (isNaN(priceSats) || priceSats <= 0) {
       exitWithError('--price must be a positive number of satoshis.');

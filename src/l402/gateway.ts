@@ -11,6 +11,7 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import type { ArkadeLightning } from '@arkade-os/boltz-swap';
 import {
   mintL402Macaroon,
@@ -21,7 +22,7 @@ import {
   type RootKeyStore,
 } from './macaroon.js';
 
-export interface PendingArkPayment {
+interface PendingArkPayment {
   paymentId: string;
   paymentHash: string;
   preimage: string;
@@ -33,19 +34,19 @@ export interface PendingArkPayment {
 }
 
 /** Narrow wallet interface — only what the gateway needs for Ark OOR detection. */
-export interface ArkWalletNotifier {
+interface ArkWalletNotifier {
   notifyIncomingFunds(callback: (funds: IncomingFundsEvent) => void): Promise<() => void>;
 }
 
 /** Incoming funds event from the Ark SDK's notifyIncomingFunds callback. */
-export interface IncomingFundsEvent {
+interface IncomingFundsEvent {
   type: 'utxo' | 'vtxo';
   newVtxos?: Array<{ value: number; [key: string]: unknown }>;
   spentVtxos?: Array<{ value: number; [key: string]: unknown }>;
   coins?: Array<{ value: number; [key: string]: unknown }>;
 }
 
-export interface GatewayConfig {
+interface GatewayConfig {
   /** Price per request in satoshis */
   priceSats: number;
   /** Root key store for per-macaroon keys. Defaults to MemoryRootKeyStore. */
@@ -66,7 +67,7 @@ export interface GatewayConfig {
   wallet?: ArkWalletNotifier;
 }
 
-export interface GatewayStats {
+interface GatewayStats {
   totalRequests: number;
   paidRequests: number;
   challengesIssued: number;
@@ -79,13 +80,13 @@ export interface GatewayStats {
   arkPendingPayments: number;
 }
 
-export interface L402Gateway {
+interface L402Gateway {
   middleware: MiddlewareHandler;
   preimageHandler: MiddlewareHandler;
-  stats: GatewayStats;
-  rootKeyStore: RootKeyStore;
-  pendingPayments: Map<string, PendingArkPayment>;
+  getStats(): Readonly<GatewayStats>;
   dispose(): void;
+  /** Exposed only for tests — do not use in production code. */
+  _testInternals(): { pendingPayments: Map<string, PendingArkPayment>; rootKeyStore: RootKeyStore };
 }
 
 /**
@@ -93,10 +94,11 @@ export interface L402Gateway {
  * Tracks timestamps of recent 402 challenges per source IP.
  */
 class RateLimiter {
-  private windows = new Map<string, number[]>();
+  private windows = new Map<string, { count: number; resetAt: number }>();
   private readonly limit: number;
   private readonly windowMs = 60_000;
   private readonly exemptPaths = new Set<string>();
+  private lastCleanup = Date.now();
 
   constructor(limit: number, exemptPaths?: string[]) {
     this.limit = limit;
@@ -111,24 +113,28 @@ class RateLimiter {
     if (path && this.exemptPaths.has(path)) return false;
 
     const now = Date.now();
-    const cutoff = now - this.windowMs;
 
-    let timestamps = this.windows.get(ip);
-    if (!timestamps) {
-      timestamps = [];
-      this.windows.set(ip, timestamps);
+    // Periodic eviction of stale entries (every 5 minutes)
+    if (now - this.lastCleanup > 300_000) {
+      for (const [key, window] of this.windows) {
+        if (window.resetAt <= now) this.windows.delete(key);
+      }
+      this.lastCleanup = now;
     }
 
-    // Prune old entries
-    while (timestamps.length > 0 && timestamps[0] < cutoff) {
-      timestamps.shift();
+    const window = this.windows.get(ip);
+
+    if (!window || window.resetAt <= now) {
+      // New window — first request
+      this.windows.set(ip, { count: 1, resetAt: now + this.windowMs });
+      return false;
     }
 
-    if (timestamps.length >= this.limit) {
+    if (window.count >= this.limit) {
       return true; // Rate limited
     }
 
-    timestamps.push(now);
+    window.count++;
     return false;
   }
 }
@@ -190,18 +196,17 @@ export function createL402Gateway(
       if (!pending.fulfilled && pending.expiresAt > now && pending.amount === amountSats) {
         pending.fulfilled = true;
         stats.arkPendingPayments = [...pendingPayments.values()].filter(p => !p.fulfilled && p.expiresAt > now).length;
-        console.log(`[l402:ark] VTXO matched payment ${pending.paymentId} (${amountSats} sats)`);
         return pending;
       }
     }
     return null;
   }
 
-  // Start VTXO listener if Ark is enabled
+  // Start VTXO listener if Ark is enabled (with retry on failure)
   let stopVtxoListener: (() => void) | null = null;
   if (arkEnabled && config.wallet) {
     const wallet = config.wallet;
-    (async () => {
+    const startListener = async (attempt = 1): Promise<void> => {
       try {
         stopVtxoListener = await wallet.notifyIncomingFunds((funds) => {
           if (funds.type === 'vtxo' && funds.newVtxos) {
@@ -212,11 +217,16 @@ export function createL402Gateway(
             }
           }
         });
-        console.log(`[l402:ark] VTXO listener started for ${arkAddress}`);
       } catch (err) {
-        console.error('[l402:ark] VTXO listener error:', err instanceof Error ? err.message : err);
+        console.error(`[l402:ark] VTXO listener error (attempt ${attempt}):`, err instanceof Error ? err.message : err);
+        if (attempt < 3) {
+          setTimeout(() => void startListener(attempt + 1), 5000 * attempt);
+        } else {
+          console.error('[l402:ark] VTXO listener failed after 3 attempts — Ark OOR payments disabled');
+        }
       }
-    })();
+    };
+    void startListener();
   }
 
   // Cleanup expired pending payments every 10s
@@ -256,25 +266,30 @@ export function createL402Gateway(
           if (arkPayment) {
             stats.arkPaidRequests++;
             stats.arkEarned += priceSats;
-            console.log(`[l402:ark] Verified Ark payment for ${reqPath} (hash: ${result.paymentHash?.slice(0, 16)}...)`);
           } else {
             stats.lightningPaidRequests++;
             stats.lightningEarned += priceSats;
-            console.log(`[l402] Verified Lightning payment for ${reqPath} (hash: ${result.paymentHash?.slice(0, 16)}...)`);
           }
           return next();
         }
-        console.log(`[l402] Invalid L402 token for ${reqPath}: ${result.error}`);
       }
     }
 
     // Rate limit 402 challenge issuance
-    const clientIp = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
-      || c.req.header('x-real-ip')
-      || 'unknown';
+    // Only trust x-forwarded-for / x-real-ip when GOLEM_TRUSTED_PROXY is set,
+    // otherwise use the socket's remote address to prevent IP spoofing.
+    let clientIp = 'unknown';
+    try {
+      const info = getConnInfo(c);
+      clientIp = info.remote.address ?? 'unknown';
+    } catch { /* unit tests run without a real socket */ }
+    if (process.env.GOLEM_TRUSTED_PROXY) {
+      clientIp = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+        || c.req.header('x-real-ip')
+        || clientIp;
+    }
     if (rateLimiter.check(clientIp, reqPath)) {
       stats.rateLimited++;
-      console.log(`[l402] Rate limited ${clientIp} for ${reqPath}`);
       return c.json({ error: 'Too many requests' }, 429);
     }
 
@@ -339,9 +354,6 @@ export function createL402Gateway(
           macaroon: arkMac.macaroonBase64,
         };
 
-        console.log(`[l402] Issued dual 402 challenge for ${reqPath} (${priceSats} sats LN / ${arkAmount} sats Ark)`);
-      } else {
-        console.log(`[l402] Issued 402 challenge for ${reqPath} (${priceSats} sats)`);
       }
 
       return c.json(responseBody, 402, {
@@ -385,8 +397,13 @@ export function createL402Gateway(
       stopVtxoListener = null;
     }
     clearInterval(cleanupInterval);
-    console.log('[l402] Gateway disposed');
   }
 
-  return { middleware, preimageHandler, stats, rootKeyStore, pendingPayments, dispose };
+  return {
+    middleware,
+    preimageHandler,
+    getStats: (): Readonly<GatewayStats> => ({ ...stats }),
+    dispose,
+    _testInternals: () => ({ pendingPayments, rootKeyStore }),
+  };
 }
