@@ -12,16 +12,11 @@
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  newMacaroon,
-  importMacaroon,
-  base64ToBytes,
-  bytesToBase64,
-} from 'macaroon';
+import { newMacaroon, importMacaroon } from 'macaroon';
 
 // --- Types ---
 
-export interface MintResult {
+interface MintResult {
   /** Base64-encoded V2 binary macaroon */
   macaroonBase64: string;
   /** Payment hash hex (from the identifier) */
@@ -30,9 +25,10 @@ export interface MintResult {
   rootKeyId: string;
 }
 
-export interface VerifyResult {
+interface VerifyResult {
   valid: boolean;
   paymentHash?: string;
+  expiresAt?: number;
   error?: string;
 }
 
@@ -42,7 +38,7 @@ export interface RootKeyStore {
   deleteKey(id: string): void;
 }
 
-export interface MintOptions {
+interface MintOptions {
   /** Payment hash hex (32 bytes / 64 chars) */
   paymentHash: string;
   /** Macaroon location (default: "golem") */
@@ -114,8 +110,8 @@ export class FileRootKeyStore implements RootKeyStore {
           this.keys.set(id, Buffer.from(hex as string, 'hex'));
         }
       }
-    } catch {
-      // Start fresh on corrupt file
+    } catch (err) {
+      console.warn('Corrupt root key file, starting fresh:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -136,14 +132,19 @@ export class FileRootKeyStore implements RootKeyStore {
 // --- Identifier encoding ---
 
 /**
- * L402 identifier: version (uint16 BE) + payment_hash (32 bytes) + root_key_id (4 bytes)
- * Total: 38 bytes
+ * L402 identifier: version (uint16 BE) + payment_hash (32 bytes) + token_id (32 bytes)
+ * Total: 66 bytes — matches Aperture/lnget format exactly.
+ *
+ * The root_key_id (4 bytes) is stored in the first 4 bytes of the 32-byte token_id
+ * field, with the remaining 28 bytes zero-padded. This maintains Golem's per-macaroon
+ * root key scheme while being wire-compatible with lnget/Aperture's DecodeIdentifier.
  */
 function buildIdentifier(paymentHash: string, rootKeyId: string): Uint8Array {
-  const buf = Buffer.alloc(38);
+  const buf = Buffer.alloc(66);
   buf.writeUInt16BE(0, 0); // version = 0
   Buffer.from(paymentHash, 'hex').copy(buf, 2);
-  Buffer.from(rootKeyId, 'hex').copy(buf, 34, 0, 4);
+  Buffer.from(rootKeyId, 'hex').copy(buf, 34, 0, 4); // first 4 bytes of token_id
+  // bytes 38-66 remain zero (padding)
   return new Uint8Array(buf);
 }
 
@@ -245,7 +246,8 @@ export function verifyL402Token(
     return { valid: false, error: 'unknown root key' };
   }
 
-  // Step 4: Verify macaroon signature via library
+  // Step 4: Verify macaroon signature via library, extract expires_at
+  let expiresAtMs: number | undefined;
   try {
     mac.verify(new Uint8Array(rootKey), (caveat: string) => {
       // Check time-before caveat
@@ -253,9 +255,21 @@ export function verifyL402Token(
         const expiry = new Date(caveat.slice('time-before '.length));
         if (isNaN(expiry.getTime())) return 'invalid time-before format';
         if (Date.now() > expiry.getTime()) return 'macaroon expired';
+        expiresAtMs = expiry.getTime();
         return null; // OK
       }
-      // Allow all other first-party caveats (service, etc.)
+      // Check expires_at caveat (unix timestamp)
+      if (caveat.startsWith('expires_at = ')) {
+        const ts = parseInt(caveat.slice('expires_at = '.length), 10);
+        if (isNaN(ts)) return 'invalid expires_at format';
+        if (Math.floor(Date.now() / 1000) >= ts) return 'macaroon expired';
+        expiresAtMs = ts * 1000;
+        return null; // OK
+      }
+      // Allow all other first-party caveats (service=, tier=, etc.).
+      // Functional enforcement of service/tier caveats is deferred to Phase 2 —
+      // for now we verify the HMAC chain (caveats can't be tampered with) but
+      // don't restrict access based on caveat values.
       return null;
     }, []);
   } catch (e) {
@@ -277,7 +291,36 @@ export function verifyL402Token(
     return { valid: false, error: 'preimage does not match payment hash' };
   }
 
-  return { valid: true, paymentHash: parsed.paymentHash };
+  return {
+    valid: true,
+    paymentHash: parsed.paymentHash,
+    expiresAt: expiresAtMs ? Math.floor(expiresAtMs / 1000) : undefined,
+  };
+}
+
+/**
+ * Mint a time-based L402 macaroon (one payment = N hours of access).
+ *
+ * Unlike mintL402Macaroon which uses a short-lived time-before caveat for replay protection,
+ * this adds an expires_at caveat with a Unix timestamp for long-lived access tokens.
+ * The HMAC chain guarantees the expires_at value cannot be tampered with.
+ */
+export function mintTimedL402Macaroon(
+  store: RootKeyStore,
+  opts: MintOptions & { durationHours: number },
+): MintResult & { expiresAt: number } {
+  const { durationHours, ...mintOpts } = opts;
+  const expiresAt = Math.floor(Date.now() / 1000) + durationHours * 3600;
+
+  // Use a long TTL for the time-before caveat (matches durationHours)
+  // The expires_at caveat is the authoritative expiry for time-based tokens
+  const result = mintL402Macaroon(store, {
+    ...mintOpts,
+    ttlSeconds: durationHours * 3600,
+    caveats: [...(mintOpts.caveats || []), `expires_at = ${expiresAt}`],
+  });
+
+  return { ...result, expiresAt };
 }
 
 // --- Header formatting ---
@@ -295,14 +338,21 @@ export function formatL402Challenge(
 
 /**
  * Parse an L402 Authorization header.
- * Format: "L402 <macaroon_base64>:<preimage_hex>"
+ * Accepts both "L402 <macaroon_base64>:<preimage_hex>" and legacy
+ * "LSAT <macaroon_base64>:<preimage_hex>" (Aperture sends both).
  */
 export function parseL402Header(
   authHeader: string,
 ): { macaroon: string; preimage: string } | null {
-  if (!authHeader.startsWith('L402 ')) return null;
+  let token: string;
+  if (authHeader.startsWith('L402 ')) {
+    token = authHeader.slice(5);
+  } else if (authHeader.startsWith('LSAT ')) {
+    token = authHeader.slice(5);
+  } else {
+    return null;
+  }
 
-  const token = authHeader.slice(5);
   const colonIdx = token.indexOf(':');
   if (colonIdx === -1) return null;
 
