@@ -10,7 +10,7 @@
 
 import { EventSource } from 'eventsource';
 (globalThis as any).EventSource = EventSource;
-import { ReadonlySingleKey, ReadonlyWallet, RestArkProvider, RestIndexerProvider } from '@arkade-os/sdk';
+import { ReadonlySingleKey, ReadonlyWallet } from '@arkade-os/sdk';
 
 const PUBKEY_HEX = '03a29419fa1e8167c16f1f848310595fe850096d9bed10b3a14ea93d64834267b4';
 const ARK_SERVER = 'https://mutinynet.arkade.sh';
@@ -42,7 +42,6 @@ async function main() {
   let notifyCount = 0;
   const stopNotify = await readonlyWallet.notifyIncomingFunds((funds) => {
     notifyCount++;
-    console.log(`   [NOTIFICATION ${notifyCount}] Type: ${funds.type}`);
     if (funds.type === 'vtxo') {
       console.log(`     New VTXOs: ${funds.newVtxos.length}`);
       for (const v of funds.newVtxos) {

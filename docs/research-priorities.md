@@ -1,39 +1,56 @@
-# Golem — Open Research Priorities (v5)
+# Golem — Open Research Priorities (v6)
 
-Questions and investigations identified during red team review and subsequent development. Ordered by criticality. Updated with delegation deep dive findings (Feb 26, 2026).
+Questions and investigations identified during red team review and subsequent development. Ordered by criticality. Updated with covenant architecture direction and delegation demotion (Feb 26, 2026).
 
 ---
 
 ## P0: Must Answer Before Writing Significant Code
 
+### NEW: Covenant VHTLC Boltz Support
+**Status:** OPEN — asked Tiero, awaiting answer
+**Source:** Session 4 covenant architecture design (Feb 26, 2026)
+**Question:** Can the Arkade-Boltz gateway support covenant-restricted VHTLCs? When Boltz creates a reverse swap, can the VHTLC claim script include Arkade introspection opcodes (`OP_INSPECTOUTPUTSCRIPTPUBKEY`, `OP_INSPECTOUTPUTVALUE`, `OP_INSPECTNUMOUTPUTS`) that constrain the claim to pay the user's taproot address?
+**Why critical:** This is the lynchpin of the Phase 1.5 keyless receive architecture. If Boltz can't create covenant-restricted VHTLCs, the claim daemon can't work and the server still needs a signing key.
+**Action:** Awaiting Tiero's response. If answer is "not yet," determine if this requires Boltz code changes or Arkade gateway changes.
+
+### NEW: Boltz Reverse Swap Signing Requirement
+**Status:** RESOLVED (Feb 26, 2026) — `createLightningInvoice()` does NOT require a signing key. Pubkey-only wallet works.
+**Source:** Session 4 covenant architecture design (Feb 26, 2026)
+**Question:** Does `createLightningInvoice()` (Boltz reverse swap) require the signing key, or just a pubkey? Can a receive-only server create Lightning invoices without holding the wallet's private key?
+**Resolution:** Traced the full call chain in `@arkade-os/boltz-swap@0.2.20`:
+1. `createLightningInvoice()` → `createReverseSwap()` (boltz-swap/dist/index.js:1535)
+2. `createReverseSwap()` calls `this.wallet.identity.compressedPublicKey()` — pure key derivation, no signing (index.js:1630)
+3. Sends `{claimPublicKey, preimageHash, invoiceAmount}` to Boltz API (`POST /v2/swap/reverse`) — no signature in request body (index.js:298)
+4. Boltz creates the BOLT11 invoice server-side. SDK never creates the invoice.
+5. `ReadonlySingleKey.compressedPublicKey()` is a simple property getter (`return this.publicKey`) — fully compatible (sdk/identity/singleKey.js:114)
+
+**Claiming the VHTLC (separate step) DOES require signing:** `claimVHTLC()` wraps identity via `claimVHTLCIdentity()` and calls `identity.sign()` (index.js:1719). This is the step covenant-based claiming would replace in Phase 1.5.
+
+**Impact:** Resolves one of two Phase 1.5 gating unknowns. A pubkey-only server CAN create Lightning invoices for the L402 gateway. The remaining unknown — whether the Arkade-Boltz gateway can support covenant-restricted VHTLCs (P0 #1 above) — is still open and waiting on Tiero. Phase 1.5 feasibility depends on BOTH questions being answered.
+
+### NEW: Safe Harbor Address Design
+**Status:** RESOLVED (Feb 26, 2026) — fully implemented
+**Source:** Red Team, architecture docs
+**Resolution:** Safe harbor implemented with two-path fallback: cooperative offboard via `Ramps.offboard()` (ASP required), unilateral unroll via `Unroll.Session` (no ASP needed). RefreshAgent monitors block-based expiry threshold (default 432 blocks / ~72 hours) and triggers emergency exit automatically. On-chain reserve tracking (15,000 sats/VTXO) ensures unilateral exit has fee-bump capacity.
+
+**Implementation:**
+- `golem init --safe-harbor <address>` — validates Bitcoin address format + network match
+- `golem safe-harbor` — show/update safe harbor address
+- `golem exit` — manual emergency exit with confirmation
+- `golem reserve` — on-chain reserve status
+- `src/wallet/golem-wallet.ts` — `exitToSafeHarbor()` two-path fallback
+- `src/agent/refresh-agent.ts` — emergency exit threshold monitoring, consecutive failure tracking
+- `src/utils/address-validation.ts` — full checksum + network validation
+- 29 new tests (146 total), zero TypeScript errors
+
 ### 1. Delegation Primitive Scope and Semantics
-**Status:** PARTIALLY RE-OPENED (Feb 26, 2026)
-**Source:** Red Team C1, M1, S2 + SDK audit + delegate branch analysis
+**Status:** DEFERRED (Feb 26, 2026) — Protocol-level resolution holds, but delegation is no longer the target architecture. Covenant-based keyless receive (Phase 1.5) is the path. Delegation becomes relevant only if covenants slip significantly.
 
-**Question:** What exactly can be delegated in the Ark protocol? Can delegation be constrained to "refresh to same owner" (preventing a compromised agent from redirecting funds)? What credential does the delegate receive, and can it be revoked?
+**Protocol-level resolution (Feb 25):** Tiero (Ark Labs) confirmed that delegation is constrained to "refresh to same owner" by protocol design. The owner pre-signs a transaction to themselves; the delegate cannot change the output destination. A compromised agent can only cause denial of service (failing to refresh), NOT fund theft.
 
-**Protocol-level resolution (Feb 25):** Tiero (Ark Labs) confirmed that delegation is constrained to "refresh to same owner" by protocol design. The owner pre-signs a transaction to themselves; the delegate cannot change the output destination. A compromised agent can only cause denial of service (failing to refresh), NOT fund theft. Collusion risk (delegate + operator) is mitigated by 1-of-N delegation supporting up to 10 delegates — not needed for PoC but available for production.
+**Implementation status:** Building blocks in published SDK, orchestration NOT available. The `delegate` branch of `arkade-os/ts-sdk` has orchestration in `examples/delegate.js`, but it hasn't been merged or published.
 
-**Implementation status: BUILDING BLOCKS in published SDK, orchestration NOT available.**
-
-The `@arkade-os/sdk@0.3.13` npm package contains the low-level primitives needed for delegation:
-- `Intent.create()` — BIP322-style ownership proofs (register + delete message types)
-- `buildForfeitTx()` — construct forfeit transactions
-- `CLTVMultisigTapscript` — CLTV-locked multisig for delegation tapscript paths
-- `VtxoScript` — custom VTXO scripts with multiple tap leaves
-- `combineTapscriptSigs()` — combine tapscript signatures from multiple parties
-
-What's **missing** is the high-level delegation orchestration — no `DelegateWallet`, no `delegatedSettle()`, no `DelegatedIdentity`. The `delegate` branch of `arkade-os/ts-sdk` has this orchestration in `examples/delegate.js`, but it hasn't been merged to main or published to npm.
-
-`wallet.settle()` has a single code path with zero delegation branching. All signing goes directly through `this.identity.sign()` with no conditional logic.
-
-**Critical correction to our docs — delegation is NOT a credential you present to the ASP.** It's a set of pre-signed artifacts (intent + partial forfeit TX signed with `SIGHASH_ALL|ANYONECANPAY`) that the delegate submits and completes during the round. The delegate is an active round participant with its own keypair, not a passive credential holder.
-
-**Delegation is per-VTXO, per-cycle.** Each VTXO must be created with a delegation tapscript (`A+D+S` where A=Alice, D=Delegate, S=Server). After each refresh, new VTXOs need new pre-signed intents. This requires the master key to come online once per refresh cycle for provisioning.
-
-**Waiting on:** Tiero's response to "can provisioning cover multiple cycles?" and "when will delegation orchestration ship in published SDK?"
-
-**Impact:** Protocol-level security model holds (refresh-to-same-owner = DoS only). But implementation path is longer than expected — Phase 2, not Phase 1.
+**Why deferred:** Delegation requires monthly provisioning from the phone. "Just refresh from the app" achieves the same outcome. Covenant path makes delegation irrelevant for the provider use case — the server doesn't need delegation if it never signs.
 
 ### 2. Arkade SDK Signer Abstraction
 **Status:** RESOLVED (Feb 25, 2026)
@@ -47,9 +64,9 @@ What's **missing** is the high-level delegation orchestration — no `DelegateWa
 **Status:** RESOLVED (Feb 25, 2026)
 **Source:** Red Team P5, F5
 **Question:** Does the Boltz-Arkade integration work on mutinynet testnet? What are the swap limits? Is the integration stable enough for a PoC?
-**Resolution:** `@arkade-os/boltz-swap@0.2.20` works on mutinynet. API connectivity confirmed via `BoltzSwapProvider` → `ArkadeLightning`. Invoice creation verified (`createLightningInvoice`), swap limits retrievable (`getLimits`), fee schedule queryable (`getFees`). GolemLightning wrapper implemented in `src/lightning/` with full unit test coverage. End-to-end flow validated with live Lightning payment on mutinynet. Arkade-Boltz gateway minimum swap: 500 sats (not 50,000). Boltz API endpoint: `https://api.boltz.mutinynet.arkade.sh`.
+**Resolution:** `@arkade-os/boltz-swap@0.2.20` works on mutinynet. API connectivity confirmed via `BoltzSwapProvider` → `ArkadeLightning`. Invoice creation verified (`createLightningInvoice`), swap limits retrievable (`getLimits`), fee schedule queryable (`getFees`). GolemLightning wrapper implemented in `src/lightning/` with full unit test coverage. End-to-end flow validated with live Lightning payment on mutinynet. Arkade-Boltz gateway minimum swap: **500 sats** (not 50,000). Fees: 0.01% submarine, 0.4% reverse. Boltz API endpoint: `https://api.boltz.mutinynet.arkade.sh`.
 
-**Additional validation (Feb 26):** Full L402 payment cycle confirmed. Voltage LND → Boltz reverse swap → Golem Ark wallet. 402 challenge in 139ms, LN payment ~1s, L402 token verification 9ms. `golem pay` command pays L402 gateways from Ark wallet via Boltz submarine swap.
+**Additional validation (Feb 26):** Full L402 payment cycle confirmed. Voltage LND → Boltz reverse swap → Golem Ark wallet. 402 challenge in 139ms, LN payment ~1s, L402 token verification 9ms. `golem pay` command pays L402 gateways from Ark wallet via Boltz submarine swap. Ark OOR path also validated: ~1.2s payment confirmation.
 
 ---
 
@@ -58,7 +75,7 @@ What's **missing** is the high-level delegation orchestration — no `DelegateWa
 ### 4. Tapsigner Compatibility with Ark Signing
 **Status:** Unresolved
 **Source:** Red Team F4
-**Question:** Does Tapsigner support the specific signing operations required by Ark (VTXO refresh, delegation credential creation)? Does it work with the Arkade SDK?
+**Question:** Does Tapsigner support the specific signing operations required by Ark (VTXO refresh)? Does it work with the Arkade SDK?
 **Why critical:** Tapsigner is the default hardware upgrade device. If it's not compatible, need to fall back to Coldcard/Trezor (more expensive, worse UX).
 **Action:** Test Tapsigner with Arkade SDK signing operations on testnet. If the SDK uses standard PSBT, Tapsigner should work (it supports PSBT). Verify.
 
@@ -78,7 +95,7 @@ What's **missing** is the high-level delegation orchestration — no `DelegateWa
 **Source:** Red Team F1
 **Question:** What's the minimal Railway template for a Golem agent? What does the /setup wizard collect?
 **Why critical:** This is how non-technical users deploy their agent.
-**Updated note (Feb 26):** Railway agent will use ServerSigner (Tier 0 hot key, encrypted on disk) for autonomous operation. Delegation-based operation (where the Railway agent acts as a delegate for a mobile wallet) is Phase 2, blocked on SDK delegation orchestration.
+**Updated note (Feb 26):** Railway agent will use ServerSigner (Phase 1 hot key, encrypted on disk). Phase 1.5 target is covenant-based receive-only mode where server has no signing key at all.
 **Action:** Study OpenClaw Railway template. Design Golem equivalent. Build and test.
 
 ### 7. Pre-Signed Transaction Tree Recovery
@@ -89,107 +106,97 @@ What's **missing** is the high-level delegation orchestration — no `DelegateWa
 **Premium tier feature:** Encrypted pre-signed transaction tree backup to user-controlled S3. But the free tier user needs a recovery story too.
 **Action:** Research Ark protocol recovery requirements. Document minimum data needed for unilateral exit.
 
+### 8. Golem Service Directory Design
+**Status:** Concept validated in storyboard, design needed
+**Source:** Storyboard (Feb 25 Session 2), feature priority #5
+**Question:** What is the minimum viable directory? Data model? Auto-registration flow from `golem gateway`? Agent auto-discovery mechanics? Search API design?
+**Why critical:** Without the directory, the L402 economy is dark — agents can't find APIs. The directory creates the network effects that turn Golem from a tool into a platform. First mover advantage is significant.
+**Scope:** Phase 1 = centralized (Golem-operated REST API + web UI). Phase 3 = decentralized (Nostr federation).
+**Action:** Design data model, REST API, auto-registration flow, search API, web UI. Build MVP.
+
 ---
 
 ## P2: Nice to Have for Phase 1, Required for Phase 2
 
-### 8. Mempool Monitoring for Dynamic Safety Margins
+### 9. Mempool Monitoring for Dynamic Safety Margins
 **Status:** Known approach, implementation needed
 **Source:** Red Team C5
 **Question:** What mempool data sources should the agent use? What's the algorithm for adjusting the refresh safety window?
 **Why critical for quality:** Static 48-hour windows are insufficient during fee market events. Dynamic margins are a core differentiator.
 **Action:** Research mempool.space API, Bitcoin Core `estimatesmartfee`, and similar. Design algorithm.
 
-### 9a. ServerSigner (Tier 0 Bootstrap Wallet)
+### 10a. ServerSigner (Tier 0 Bootstrap Wallet)
 **Status:** Design complete, implementation straightforward
 **Source:** Red Team (split from original #9)
 **Question:** How does the hot key bootstrap signer work for Railway/self-hosted deployments?
-**Resolution:** ServerSigner holds a secp256k1 key encrypted on disk (AES-256). Same operational model as current MockSigner but with at-rest encryption. No delegation needed — key is present for all signing operations. This is the immediate next implementation task for production readiness.
+**Resolution:** ServerSigner holds a secp256k1 key encrypted on disk (AES-256). Same operational model as current MockSigner but with at-rest encryption. No delegation needed — key is present for all signing operations. Same security model as every LN node and Claw Cash (Tiero's own agent wallet).
 **Action:** Implement ServerSigner with AES-256 encryption, key derivation from user password.
 
-### 9b. DelegateIdentity (Post-Sweep Delegation)
-**Status:** Blocked on SDK orchestration
-**Source:** Red Team + delegation deep dive (Feb 26, 2026)
-**Question:** How does the server operate as a delegate after the user sweeps funds to a mobile wallet?
-**Significantly more complex than originally scoped.** Requires:
-- Own keypair for MuSig2 tree signing participation
-- Storage of user's pre-signed intent + tapScriptSig for forfeit TX
-- Custom Identity implementation that combines signatures during forfeit TX signing
-- VTXO creation with delegation tapscripts (`A+D+S` with CLTV timelock)
-- Periodic reprovisioning (master key online once per refresh cycle)
+### 10b. DelegateIdentity (Post-Sweep Delegation)
+**Status:** DEFERRED — Covenant path eliminates the need for delegation on the receive side. "Just refresh from the app" handles the spend side.
 
-Blocked on delegation orchestration shipping in published SDK (see #13). **This is a Phase 2 task, not Phase 1.**
+Previously blocked on SDK orchestration. Now irrelevant for the target architecture. Delegation requires monthly provisioning from the phone anyway, so it adds complexity without benefit over the covenant + mobile app approach.
 
-### 10. Sweep-to-Mobile Flow
-**Status:** Design needed, complexity increased
+### 11. Sweep-to-Mobile Flow
+**Status:** Simplified by covenant architecture
 **Source:** Red Team
-**Question:** How does a user sweep from Tier 0 hot wallet to a mobile hardware signer?
 
-**New understanding (Feb 26):** After sweep from wallet A (ServerSigner) to wallet B (mobile), the mobile app must create VTXOs with delegation tapscripts (`A+D+S` where D = server's delegate pubkey), sign intents + partial forfeits, and send these to the server. This is a periodic provisioning step (once per refresh cycle). The server then operates as a delegate for those specific VTXOs.
+**Provider path (Marcus):** No sweep needed. Server runs receive-only after init. User imports seed into mobile app. Server continues receive-only via covenant claim daemon (Phase 1.5).
 
-This is more complex than "issue a delegation credential." It requires the mobile app to come online and sign new artifacts each cycle. The UX implications depend on whether provisioning can cover multiple cycles (see #14).
+**Agent path (Jake):** Agent wallet has hot key with spending caps. When balance justifies, user sweeps to mobile wallet. No delegation credential needed — mobile app handles refresh directly.
 
-### 11. L402 Gateway Prototype
-**Status:** RESOLVED (Feb 26, 2026)
-**Source:** Red Team, L402 implementation sessions
+### 12. L402 Gateway Prototype
+**Status:** RESOLVED — Fully built, dual-mode (Lightning + Ark-native OOR), security hardened. 117 tests. lnget wire compatible.
+**Source:** Red Team, L402 implementation sessions (Feb 25–26, 2026)
 
-**Fully built and security-hardened.** Components:
+**Components:**
 - `src/l402/macaroon.ts` — `macaroon` npm package (official JS port of Go's `go-macaroon/macaroon`, same library LND/Aperture use). V2 binary serialization.
-- `src/l402/gateway.ts` — Hono middleware with per-macaroon root keys, time-before caveats, IP rate limiting.
+- `src/l402/gateway.ts` — Hono middleware with dual-mode 402 challenges (Lightning + Ark OOR), per-macaroon root keys, time-before caveats, IP rate limiting, VTXO listener for OOR detection.
 - `src/l402/gateway-server.ts` — Standalone server with FileRootKeyStore (0600 permissions), security headers.
-- `src/cli/commands/pay.ts` — L402 client (`golem pay`) that auto-pays 402 challenges from Ark wallet.
+- `src/cli/commands/pay.ts` — L402 client (`golem pay`) that auto-pays 402 challenges from Ark wallet via Lightning or Ark OOR.
 
-**Security:** Per-macaroon root keys via RootKeyStore, constant-time preimage verification (`crypto.timingSafeEqual`), time-before caveats (300s default TTL), IP rate limiting (30 challenges/min). 35 security tests.
+**Security:** Per-macaroon root keys via RootKeyStore, constant-time preimage verification (`crypto.timingSafeEqual`), time-before caveats (300s default TTL), IP rate limiting (30 challenges/min). 44 security tests.
 
-**lnget compatibility validated:** Go's `macaroon.UnmarshalBinary()` successfully deserializes Golem's V2 binary macaroons. lnget parses the 402 challenge, extracts payment hash, creates pending token. Wire-compatible with Lightning Labs ecosystem.
+**Dual-mode validated:** Lightning path (Voltage LND → Boltz → Ark) and Ark OOR path (direct VTXO send → gateway VTXO listener detection → preimage reveal) both working end-to-end on mutinynet.
 
-### 12. Fintech Attorney Consultation
+**lnget end-to-end validated (Feb 26, 2026):** Full L402 flow confirmed with lnget CLI against Golem gateway on mutinynet. lnget parses 402 + WWW-Authenticate header, pays Boltz invoice via Voltage LND, receives preimage, retries with Authorization header, gateway returns proxied upstream response. Two fixes required: (1) Golem identifier padded to 66 bytes (Aperture's `DecodeIdentifier` format), (2) Gateway accepts `LSAT` prefix in Authorization header (Aperture sends both LSAT and L402 for backward compat). Also patched lnget signet→simnet mapping bug in `ln/lnd.go`. Exact command: `lnget --max-cost 1100 -q http://localhost:8402/v1/aqi`
+
+### 13. Fintech Attorney Consultation
 **Status:** Not started
 **Source:** Red Team R1, R2, R4
-**Question:** Does the user-owned agent model with delegation credentials constitute money transmission? What jurisdictional issues exist?
+**Question:** Does the user-owned agent model constitute money transmission? What jurisdictional issues exist?
 **Why critical:** Must answer before mainnet launch. Not blocking for testnet PoC.
 **Action:** Identify Bitcoin-focused fintech attorneys. Schedule consultation before Phase 2.
 
-### 13. Delegation SDK Availability Timeline
-**Status:** Blocked — waiting on Ark Labs
-**Source:** SDK audit + delegate branch analysis (Feb 26, 2026)
-**Question:** When will delegation orchestration (high-level wiring of Intent, buildForfeitTx, CLTVMultisigTapscript, combineTapscriptSigs) ship in the published `@arkade-os/sdk` npm package?
+### 14. Delegation SDK Availability Timeline
+**Status:** DEFERRED — No longer blocking. Covenant path is the target architecture.
 
-**Why critical:** The low-level primitives exist in the published SDK (v0.3.13), but the orchestration layer (how to wire them for delegated refresh) only exists in `examples/delegate.js` on the unpublished `delegate` branch of `arkade-os/ts-sdk`. Without this, Golem cannot implement the post-sweep delegate flow. The Tier 0 hot key ServerSigner works without delegation, but the upgrade path from Tier 0 → delegated operation is blocked.
+The low-level primitives exist in the published SDK (v0.3.13), but the orchestration layer only exists on the unpublished `delegate` branch. This no longer matters for Golem's roadmap — delegation is deferred in favor of covenants.
 
-**What exists in published SDK:**
-| Primitive | Location | Status |
-|-----------|----------|--------|
-| `Intent.create()` | `intent/index.d.ts` | Exported, usable |
-| `buildForfeitTx()` | `forfeit.d.ts` | Exported, usable |
-| `CLTVMultisigTapscript` | `script/tapscript.d.ts` | Exported, usable |
-| `VtxoScript` | `script/base.d.ts` | Exported, usable |
-| `combineTapscriptSigs()` | `utils/arkTransaction.d.ts` | Exported, usable |
+### 15. Delegation Provisioning Cycle UX
+**Status:** DEFERRED — Irrelevant if covenants ship. "Just refresh from the app" is the answer.
 
-**What's missing:** `DelegateWallet`, `delegatedSettle()`, `DelegatedIdentity` — any high-level class or method that wires the primitives into a delegation flow.
+Delegation requires monthly provisioning from the phone, making its UX burden equivalent to just refreshing from the app directly. The covenant path eliminates the need for delegation entirely on the receive side.
 
-**Action:** Track ts-sdk `delegate` branch. Ask Tiero about timeline. Consider building custom orchestration using exported primitives if SDK timeline is too slow.
+---
 
-### 14. Delegation Provisioning Cycle UX
-**Status:** Design needed
-**Source:** delegate.js example analysis (Feb 26, 2026)
-**Question:** How often must the master key come online to provision new delegation intents? Can a single provisioning session create intents for multiple future refresh cycles, or only the next one? How does the mobile app UX handle this?
+## Demoted / Deferred Concepts
 
-**Why critical:** If provisioning is required every refresh cycle (~monthly on mainnet), the mobile app must be opened monthly to sign new intents. This is a significant UX constraint. If multiple cycles can be pre-provisioned, the burden drops dramatically.
+Concepts that were actively explored and consciously deprioritized:
 
-**UX options to explore:**
-- Background provisioning (iOS/Android background task when app is opened for any reason)
-- Push notification to "refresh your delegation" when cycle is approaching
-- Automatic provisioning when app is opened (silent, no user action needed)
-- Multi-cycle pre-provisioning (if protocol supports it)
-
-**Action:** Waiting on Tiero's response. Then design the provisioning UX.
+| Concept | Status | Rationale |
+|---------|--------|-----------|
+| Delegation (DelegateIdentity) | Deferred to Phase 2+ | Covenant path eliminates the need. Monthly provisioning = same UX burden as "just refresh from the app." |
+| 2-of-2 Multisig (Tiero's proposal) | Validated, deferred | More complex than covenants (still puts a key on server). Remains fallback if covenants slip. |
+| Golem Swap Server | Rejected | Covenants solve the problem natively. No need for a custom intermediary. |
+| Delegation SDK Timeline (#14) | Deferred | No longer blocking. Not tracking. |
+| Delegation Provisioning UX (#15) | Deferred | Moot if covenants ship. |
 
 ---
 
 ## Validated via Live Testnet (Feb 25–26, 2026)
 
-All P0 items resolved with live validation on mutinynet. End-to-end testing covers: wallet creation, boarding, OOR send, VTXO refresh monitoring, L402 gateway with real Lightning payments, and lnget wire compatibility.
+All P0 items resolved with live validation on mutinynet. End-to-end testing covers: wallet creation, boarding, OOR send, VTXO refresh monitoring, L402 gateway with real Lightning and Ark OOR payments, and lnget wire compatibility.
 
 | Capability | Status | Notes |
 |---|---|---|
@@ -202,10 +209,17 @@ All P0 items resolved with live validation on mutinynet. End-to-end testing cove
 | GolemIdentity bridge | Confirmed | PSBT round-trip signing via MockSigner → GolemIdentity → SDK |
 | EventSource polyfill | Confirmed | Required before SDK imports; crashes without it |
 | L402 Lightning payment | Confirmed | Voltage LND → Boltz → Golem Ark wallet. 402→pay→200 in ~2s |
+| L402 Ark OOR payment | Confirmed | Direct OOR → VTXO listener detection → preimage reveal. ~1.2s confirmation |
 | L402 macaroon security | Confirmed | V2 binary, per-key root store, time-before caveats, constant-time verify |
-| lnget wire compatibility | Confirmed | Go `macaroon.UnmarshalBinary()` parses Golem macaroons, lnget creates pending token |
-| golem pay (L402 client) | Confirmed | Ark wallet → Boltz submarine swap → Lightning → L402 gateway |
+| lnget e2e compatibility | Confirmed | Full L402 flow: lnget parses 402 → pays Boltz invoice via LND → retries with preimage → gets upstream response. Fixes: 66-byte identifier, LSAT prefix support. |
+| Safe harbor exit | Confirmed | Two-path fallback (offboard/unroll), emergency threshold monitoring, on-chain reserve tracking. 29 tests. |
+| golem pay (L402 client) | Confirmed | Lightning: Ark → Boltz submarine swap → Lightning → L402 gateway. OOR: direct Ark send |
 | Read-only wallet | Confirmed | `ReadonlySingleKey` + `ReadonlyWallet` returns correct balance with pubkey only |
+| L402 settlement latency | Confirmed | 402 challenge: 139ms. LN payment: ~1s. L402 verification: 9ms. Ark OOR: ~1.2s total. |
+| Boltz Arkade-Gateway minimums | Confirmed | 500 sats minimum (not 50,000). 0.01% submarine, 0.4% reverse. |
+| Claw Cash analysis | Confirmed | Custodial, same Boltz SwapManager pattern. Complementary, not competitive. |
+| Covenant script specification | Confirmed | Three opcodes (209, 207, 213). ~50-60 bytes tapscript. Same as `unroll.hack`. |
+| Boltz reverse swap signing | Confirmed | `createLightningInvoice()` needs pubkey only, no signing. `ReadonlySingleKey` compatible. Claiming VHTLC still requires signing (covenant target). |
 
 ---
 
@@ -219,7 +233,7 @@ All P0 items resolved with live validation on mutinynet. End-to-end testing cove
 | Neobank branding? | Removed from product docs. Lives in VISION.md only. |
 | Swap provider for onboarding? | Boltz. Existing Arkade integration available. |
 | Hardware upgrade device? | Tapsigner (~$20 NFC card). Pending compatibility verification. |
-| Always-on signer recommendation? | Removed. Physical security nightmare. Use delegation instead. |
+| Always-on signer recommendation? | Removed. Physical security nightmare. |
 | Dashboard scope? | Minimal. Wallet UI, not developer dashboard. |
 | Competitive moat vs. Ark Labs? | Open-source + free tier + premium services. Ark Labs wants third parties to build on Arkade. |
 | Multi-ASP timeline? | Phase 3. Acceptable single-ASP risk in Phase 1-2. |
@@ -228,3 +242,4 @@ All P0 items resolved with live validation on mutinynet. End-to-end testing cove
 | SDK signer abstraction (P0 #2)? | SDK uses Identity interface. GolemIdentity bridge wraps GolemSigner via PSBT extraction. See `docs/sdk-identity-analysis.md`. |
 | Boltz + Arkade testnet (P0 #3)? | `@arkade-os/boltz-swap@0.2.20` works on mutinynet. Invoice creation, limits, fees all verified. GolemLightning wrapper in `src/lightning/`. |
 | Tax reporting data (former #10)? | Ensure all agent actions are logged with timestamps, amounts, and counterparties. Research whether refreshes constitute taxable events (likely no, but confirm with attorney). |
+| Golem swap server concept? | Rejected. Covenants solve the problem natively. |

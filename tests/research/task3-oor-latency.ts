@@ -80,9 +80,8 @@ async function main() {
 
         // Set up detection listener
         let detectedAt = 0;
-        const stopNotify = await receiverWallet.notifyIncomingFunds((funds) => {
+        const stopNotify = await receiverWallet.notifyIncomingFunds((_funds) => {
           if (!detectedAt) detectedAt = Date.now();
-          console.log(`   [DETECTED] Type: ${funds.type}, at: ${detectedAt}ms`);
         });
 
         // Time the OOR send

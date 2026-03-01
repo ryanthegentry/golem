@@ -1,7 +1,4 @@
-/**
- * Fixed-size ring buffer for storing recent events.
- * Oldest entries are evicted when capacity is exceeded.
- */
+/** Fixed-size event buffer (FIFO eviction when capacity exceeded). */
 export class EventLog<T> {
   private events: T[] = [];
 

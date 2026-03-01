@@ -12,8 +12,11 @@ import { EventSource } from 'eventsource';
 
 import { MockSigner } from '../src/signer/mock-signer.js';
 import { GolemWallet } from '../src/wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../src/wallet/config.js';
+import { walletConfigFromNetwork } from '../src/wallet/config.js';
+import { getNetworkConfig } from '../src/config/networks.js';
 import { RefreshAgent } from '../src/agent/refresh-agent.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 import type { RefreshEvent } from '../src/agent/refresh-agent.js';
 
 function sleep(ms: number) {
@@ -74,9 +77,7 @@ async function main() {
 
   // Step 3: Board into Ark
   console.log('\n3. Boarding into Ark...');
-  const boardTxid = await wallet.settle(undefined, (event) => {
-    console.log(`  [settle] ${event.type}`);
-  });
+  const boardTxid = await wallet.settle(undefined);
   console.log(`  Commitment txid: ${boardTxid}`);
 
   // Step 4: Verify VTXOs
@@ -106,7 +107,6 @@ async function main() {
     { pollIntervalMs: 60_000, safetyMarginMs: 3 * 24 * 60 * 60 * 1000 },
     (e) => {
       events.push(e);
-      console.log(`  [agent] ${e.type}`, 'expiringCount' in e ? `count=${e.expiringCount}` : '');
     },
   );
 

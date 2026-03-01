@@ -5,9 +5,14 @@ import { EventSource } from 'eventsource';
 import { createHash } from 'node:crypto';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../wallet/config.js';
+import { walletConfigFromNetwork } from '../wallet/config.js';
+import { lightningConfigFromNetwork } from '../lightning/config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { GolemLightning } from '../lightning/golem-lightning.js';
-import { MUTINYNET_LIGHTNING_CONFIG } from '../lightning/config.js';
+
+const mutinynetConfig = getNetworkConfig('mutinynet');
+const MUTINYNET_CONFIG = walletConfigFromNetwork(mutinynetConfig);
+const MUTINYNET_LIGHTNING_CONFIG = lightningConfigFromNetwork(mutinynetConfig);
 import { decodeInvoice, getInvoicePaymentHash } from '@arkade-os/boltz-swap';
 
 const BOLTZ_API = 'https://api.boltz.mutinynet.arkade.sh';

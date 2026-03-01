@@ -1,7 +1,9 @@
 import type { ExtendedVirtualCoin } from '@arkade-os/sdk';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
+import { DEFAULT_RESERVE_PER_VTXO, DEFAULT_EXIT_THRESHOLD_BLOCKS } from '../config/defaults.js';
+import { isBlockHeight, getNearestExpiryMs } from './expiry.js';
 
-export interface RefreshAgentConfig {
+interface RefreshAgentConfig {
   /** How often to check for expiring VTXOs (ms). Default: 60_000 (1 min) */
   pollIntervalMs: number;
   /**
@@ -32,6 +34,17 @@ export interface RefreshAgentConfig {
   maxVtxoCount: number;
   /** VTXOs below this amount (sats) are considered dust. Default: 1000 */
   dustThresholdSats: number;
+  /** On-chain Bitcoin address for emergency exit. If not set, emergency exit is disabled. */
+  safeHarborAddress?: string;
+  /** Blocks before VTXO expiry at which emergency exit triggers. Default: 432 (~72 hours). */
+  safeHarborExitThresholdBlocks: number;
+}
+
+interface EmergencyState {
+  consecutiveRefreshFailures: number;
+  lastSuccessfulRefresh: Date | null;
+  emergencyExitAttempted: boolean;
+  emergencyExitCompleted: boolean;
 }
 
 export const DEFAULT_REFRESH_CONFIG: RefreshAgentConfig = {
@@ -39,19 +52,28 @@ export const DEFAULT_REFRESH_CONFIG: RefreshAgentConfig = {
   safetyMarginMs: 3 * 24 * 60 * 60 * 1000, // 3 days
   maxVtxoCount: 10,
   dustThresholdSats: 1000,
+  safeHarborExitThresholdBlocks: DEFAULT_EXIT_THRESHOLD_BLOCKS,
 };
 
 export type RefreshEvent =
-  | { type: 'check'; expiringCount: number; vtxoCount: number; dustCount: number; timestamp: string }
+  | { type: 'check'; expiringCount: number; vtxoCount: number; dustCount: number; nearestExpiryMs: number | null; totalBalanceSats: number; timestamp: string }
   | { type: 'refresh_start'; vtxoCount: number; timestamp: string }
   | { type: 'refresh_ok'; txid: string; timestamp: string }
   | { type: 'refresh_error'; error: string; timestamp: string }
   | { type: 'consolidation_start'; vtxoCount: number; totalSats: number; timestamp: string }
   | { type: 'consolidation_ok'; txid: string; inputCount: number; timestamp: string }
+  | { type: 'consolidation_error'; error: string; timestamp: string }
   | { type: 'consolidation_skip'; reason: string; timestamp: string }
+  | { type: 'reserve_low'; actual: number; required: number; vtxoCount: number; timestamp: string }
+  | { type: 'emergency_exit_triggered'; reason: string; timestamp: string }
+  | { type: 'emergency_exit_completed'; txid: string; method: 'offboard' | 'unroll'; timestamp: string }
+  | { type: 'emergency_exit_failed'; error: string; timestamp: string }
   | { type: 'stopped'; timestamp: string };
 
-export type RefreshEventHandler = (event: RefreshEvent) => void;
+/** Distributive Omit that preserves discriminated union members. */
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
+
+type RefreshEventHandler = (event: RefreshEvent) => void;
 
 /**
  * Automated VTXO refresh agent.
@@ -63,11 +85,18 @@ export type RefreshEventHandler = (event: RefreshEvent) => void;
 export class RefreshAgent {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private readonly emergency: EmergencyState = {
+    consecutiveRefreshFailures: 0,
+    lastSuccessfulRefresh: null,
+    emergencyExitAttempted: false,
+    emergencyExitCompleted: false,
+  };
 
   constructor(
     private readonly wallet: GolemWallet,
     private readonly config: RefreshAgentConfig = DEFAULT_REFRESH_CONFIG,
     private readonly onEvent?: RefreshEventHandler,
+    private readonly gateway?: { shutdown(): void },
   ) {}
 
   /** Start the polling loop */
@@ -87,7 +116,7 @@ export class RefreshAgent {
       clearInterval(this.timer);
       this.timer = null;
     }
-    this.emit({ type: 'stopped', timestamp: new Date().toISOString() });
+    this.emit({ type: 'stopped' });
   }
 
   get isRunning(): boolean {
@@ -96,6 +125,9 @@ export class RefreshAgent {
 
   /** Run a single check-and-refresh cycle (public for testing) */
   async tick(): Promise<void> {
+    // If emergency exit already completed, do nothing
+    if (this.emergency.emergencyExitCompleted) return;
+
     let refreshed = false;
 
     try {
@@ -106,36 +138,57 @@ export class RefreshAgent {
       );
       const dustCount = spendable.filter(v => v.value < this.config.dustThresholdSats).length;
 
+      // Compute nearest expiry across all VTXOs (ms remaining, or null if none)
+      const nearestExpiryMs = getNearestExpiryMs(
+        allVtxos.map(v => ({ batchExpiry: v.virtualStatus?.batchExpiry ?? 0 })),
+      );
+
+      // Compute total balance from spendable VTXOs (avoids extra SDK call)
+      const totalBalanceSats = spendable.reduce((sum, v) => sum + v.value, 0);
+
       this.emit({
         type: 'check',
         expiringCount: expiring.length,
         vtxoCount: spendable.length,
         dustCount,
-        timestamp: new Date().toISOString(),
+        nearestExpiryMs,
+        totalBalanceSats,
       });
+
+      // Reserve monitoring — warn if on-chain reserve is low
+      await this.checkReserve(spendable.length);
+
+      // Emergency exit check — block-based threshold
+      if (this.config.safeHarborAddress && allVtxos.length > 0) {
+        const shouldExit = this.shouldEmergencyExit(allVtxos);
+        if (shouldExit && this.emergency.consecutiveRefreshFailures > 0) {
+          await this.attemptEmergencyExit();
+          return;
+        }
+      }
 
       if (expiring.length > 0) {
         this.emit({
           type: 'refresh_start',
           vtxoCount: expiring.length,
-          timestamp: new Date().toISOString(),
         });
 
         const txid = await this.wallet.renewVtxos();
         refreshed = true;
+        this.emergency.consecutiveRefreshFailures = 0;
+        this.emergency.lastSuccessfulRefresh = new Date();
 
         this.emit({
           type: 'refresh_ok',
           txid,
-          timestamp: new Date().toISOString(),
         });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      this.emergency.consecutiveRefreshFailures++;
       this.emit({
         type: 'refresh_error',
         error: message,
-        timestamp: new Date().toISOString(),
       });
       return; // Don't attempt consolidation after an error
     }
@@ -149,7 +202,6 @@ export class RefreshAgent {
         this.emit({
           type: 'consolidation_skip',
           reason: 'not needed',
-          timestamp: new Date().toISOString(),
         });
         return;
       }
@@ -161,7 +213,6 @@ export class RefreshAgent {
         type: 'consolidation_start',
         vtxoCount: candidates.length,
         totalSats,
-        timestamp: new Date().toISOString(),
       });
 
       const txid = await this.wallet.consolidateVtxos(candidates);
@@ -170,15 +221,100 @@ export class RefreshAgent {
         type: 'consolidation_ok',
         txid,
         inputCount: candidates.length,
-        timestamp: new Date().toISOString(),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.emit({
-        type: 'refresh_error',
+        type: 'consolidation_error',
         error: message,
-        timestamp: new Date().toISOString(),
       });
+    }
+  }
+
+  /**
+   * Check if the closest VTXO expiry is within the emergency exit threshold (block-based).
+   *
+   * The threshold is block-based, not time-based. For VTXOs with block-height-based expiry
+   * (mutinynet/regtest), we compare directly. For timestamp-based expiry (mainnet), we
+   * approximate using 10 min/block.
+   */
+  private shouldEmergencyExit(vtxos: ExtendedVirtualCoin[]): boolean {
+    const threshold = this.config.safeHarborExitThresholdBlocks;
+
+    for (const vtxo of vtxos) {
+      const expiry = vtxo.virtualStatus.batchExpiry;
+      if (!expiry || expiry <= 0) continue;
+
+      if (isBlockHeight(expiry)) {
+        // Block-height expiry — compare directly (need current block height)
+        // For now, we can't compare without current block height.
+        // The emergency exit will rely on the SDK's expiry detection + consecutive failures.
+        // TODO: Fetch current block height from esplora for direct comparison.
+        continue;
+      }
+
+      // Timestamp-based expiry — convert threshold blocks to ms (10 min/block for mainnet)
+      const thresholdMs = threshold * 10 * 60 * 1000;
+      const remainingMs = expiry - Date.now();
+      if (remainingMs > 0 && remainingMs < thresholdMs) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /** Check on-chain reserve balance against VTXO count requirement. */
+  private async checkReserve(vtxoCount: number): Promise<void> {
+    if (vtxoCount === 0) return;
+
+    try {
+      const reserve = await this.wallet.getOnchainReserveBalance();
+      const required = vtxoCount * DEFAULT_RESERVE_PER_VTXO;
+
+      if (reserve < required) {
+        this.emit({
+          type: 'reserve_low',
+          actual: reserve,
+          required,
+          vtxoCount,
+        });
+      }
+    } catch {
+      // OnchainWallet may not be funded yet — don't block on this
+    }
+  }
+
+  /** Attempt emergency exit to safe harbor address. */
+  private async attemptEmergencyExit(): Promise<void> {
+    const address = this.config.safeHarborAddress;
+    if (!address) return;
+
+    this.emergency.emergencyExitAttempted = true;
+
+    this.emit({
+      type: 'emergency_exit_triggered',
+      reason: `VTXOs approaching expiry, ${this.emergency.consecutiveRefreshFailures} consecutive refresh failures`,
+    });
+
+    try {
+      const result = await this.wallet.exitToSafeHarbor(address, this.gateway);
+
+      this.emergency.emergencyExitCompleted = true;
+      this.emit({
+        type: 'emergency_exit_completed',
+        txid: result.txid,
+        method: result.method,
+      });
+
+      this.stop();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({
+        type: 'emergency_exit_failed',
+        error: message,
+      });
+      // Keep running — will retry next tick
     }
   }
 
@@ -209,7 +345,7 @@ export class RefreshAgent {
     return { needed: false };
   }
 
-  private emit(event: RefreshEvent): void {
-    this.onEvent?.(event);
+  private emit(event: DistributiveOmit<RefreshEvent, 'timestamp'>): void {
+    this.onEvent?.({ ...event, timestamp: new Date().toISOString() } as RefreshEvent);
   }
 }

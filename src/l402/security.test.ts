@@ -21,7 +21,6 @@ import {
 } from './macaroon.js';
 import {
   createL402Gateway,
-  type PendingArkPayment,
 } from './gateway.js';
 import { importMacaroon } from 'macaroon';
 
@@ -208,7 +207,7 @@ describe('L402 Security — macaroon-v2', () => {
       expect(json.i64 || json.i).toBeTruthy();
     });
 
-    it('identifier encodes version + payment_hash + root_key_id (38 bytes)', () => {
+    it('identifier encodes version + payment_hash + token_id (66 bytes, Aperture-compatible)', () => {
       const { paymentHash } = makePreimage();
       const { macaroonBase64 } = mintL402Macaroon(store, { paymentHash });
 
@@ -224,14 +223,18 @@ describe('L402 Security — macaroon-v2', () => {
         idBytes = Buffer.from(json.i!, 'utf-8');
       }
 
-      // Should be 38 bytes: 2 (version) + 32 (payment_hash) + 4 (root_key_id)
-      expect(idBytes.length).toBe(38);
+      // Should be 66 bytes: 2 (version) + 32 (payment_hash) + 32 (token_id)
+      // Matches Aperture/lnget DecodeIdentifier format exactly
+      expect(idBytes.length).toBe(66);
 
       // Version should be 0
       expect(idBytes.readUInt16BE(0)).toBe(0);
 
       // Payment hash should match
       expect(idBytes.subarray(2, 34).toString('hex')).toBe(paymentHash);
+
+      // Root key ID is in first 4 bytes of token_id field
+      expect(idBytes.subarray(34, 38).toString('hex')).toBeTruthy();
     });
 
     it('macaroon round-trips through export/import', () => {
@@ -371,6 +374,13 @@ describe('L402 Security — macaroon-v2', () => {
       expect(result).not.toBeNull();
       expect(result!.macaroon).toBe('mac');
       expect(result!.preimage).toBe('pre:image:extra');
+    });
+
+    it('parses legacy LSAT Authorization header (Aperture backward compat)', () => {
+      const result = parseL402Header('LSAT macaroondata:preimagedata');
+      expect(result).not.toBeNull();
+      expect(result!.macaroon).toBe('macaroondata');
+      expect(result!.preimage).toBe('preimagedata');
     });
   });
 
@@ -656,7 +666,7 @@ describe('L402 Security — macaroon-v2', () => {
       expect(pendingCtx._getResponse().status).toBe(202);
 
       // Simulate VTXO detection
-      const pending = gateway.pendingPayments.get(paymentId)!;
+      const pending = gateway._testInternals().pendingPayments.get(paymentId)!;
       pending.fulfilled = true;
 
       // Poll again — should be 200 with preimage
@@ -684,7 +694,7 @@ describe('L402 Security — macaroon-v2', () => {
       const arkPayment = challengeCtx._getResponse().body.ark_payment;
 
       // Simulate fulfillment
-      const pending = gateway.pendingPayments.get(arkPayment.payment_id)!;
+      const pending = gateway._testInternals().pendingPayments.get(arkPayment.payment_id)!;
       pending.fulfilled = true;
 
       // Get preimage
@@ -693,7 +703,7 @@ describe('L402 Security — macaroon-v2', () => {
       const { preimage, macaroon } = preimageCtx._getResponse().body;
 
       // Verify through standard L402 verification — proves Option B works
-      const result = verifyL402Token(gateway.rootKeyStore, macaroon, preimage);
+      const result = verifyL402Token(gateway._testInternals().rootKeyStore, macaroon, preimage);
       expect(result.valid).toBe(true);
 
       gateway.dispose();
@@ -714,13 +724,13 @@ describe('L402 Security — macaroon-v2', () => {
       await gateway.middleware(challengeCtx as any, vi.fn());
       const arkPayment = challengeCtx._getResponse().body.ark_payment;
 
-      expect(gateway.pendingPayments.has(arkPayment.payment_id)).toBe(true);
+      expect(gateway._testInternals().pendingPayments.has(arkPayment.payment_id)).toBe(true);
 
       // Fast-forward past expiry + cleanup interval
       vi.advanceTimersByTime(11_000);
 
       // Pending payment should be gone after cleanup
-      expect(gateway.pendingPayments.has(arkPayment.payment_id)).toBe(false);
+      expect(gateway._testInternals().pendingPayments.has(arkPayment.payment_id)).toBe(false);
 
       gateway.dispose();
       vi.useRealTimers();
@@ -738,15 +748,10 @@ describe('L402 Security — macaroon-v2', () => {
       const challengeCtx = makeContext('/api/data');
       await gateway.middleware(challengeCtx as any, vi.fn());
       const arkPayment = challengeCtx._getResponse().body.ark_payment;
-      const pending = gateway.pendingPayments.get(arkPayment.payment_id)!;
+      const pending = gateway._testInternals().pendingPayments.get(arkPayment.payment_id)!;
 
       // Directly test matchIncomingVtxo via the pending payment
       expect(pending.fulfilled).toBe(false);
-
-      // Simulate VTXO with wrong amount — should not match
-      const wrongAmount = arkPayment.amount + 50;
-      // No match function is directly exposed, but we can verify the pending stays unfulfilled
-      // by checking that a different amount doesn't auto-match
 
       // Simulate VTXO with correct amount via setting fulfilled (the listener would do this)
       pending.fulfilled = true;
@@ -764,30 +769,30 @@ describe('L402 Security — macaroon-v2', () => {
       });
 
       // Pay with Lightning macaroon
-      const lnMac = mintL402Macaroon(gateway.rootKeyStore, { paymentHash });
+      const lnMac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
       const lnCtx = makeContext('/api/data', {
         authorization: `L402 ${lnMac.macaroonBase64}:${preimage}`,
       });
       await gateway.middleware(lnCtx as any, vi.fn());
 
-      expect(gateway.stats.lightningPaidRequests).toBe(1);
-      expect(gateway.stats.lightningEarned).toBe(1000);
+      expect(gateway.getStats().lightningPaidRequests).toBe(1);
+      expect(gateway.getStats().lightningEarned).toBe(1000);
 
       // Issue 402 and "pay" with Ark macaroon
       const challengeCtx = makeContext('/api/data');
       await gateway.middleware(challengeCtx as any, vi.fn());
       const arkPayment = challengeCtx._getResponse().body.ark_payment;
-      const pending = gateway.pendingPayments.get(arkPayment.payment_id)!;
+      const pending = gateway._testInternals().pendingPayments.get(arkPayment.payment_id)!;
 
       const arkCtx = makeContext('/api/data', {
         authorization: `L402 ${pending.macaroonBase64}:${pending.preimage}`,
       });
       await gateway.middleware(arkCtx as any, vi.fn());
 
-      expect(gateway.stats.arkPaidRequests).toBe(1);
-      expect(gateway.stats.arkEarned).toBe(1000);
-      expect(gateway.stats.paidRequests).toBe(2);
-      expect(gateway.stats.totalSatsEarned).toBe(2000);
+      expect(gateway.getStats().arkPaidRequests).toBe(1);
+      expect(gateway.getStats().arkEarned).toBe(1000);
+      expect(gateway.getStats().paidRequests).toBe(2);
+      expect(gateway.getStats().totalSatsEarned).toBe(2000);
 
       gateway.dispose();
     });

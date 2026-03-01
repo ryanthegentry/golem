@@ -26,8 +26,11 @@ import { serve } from '@hono/node-server';
 import { ArkadeLightning, BoltzSwapProvider } from '@arkade-os/boltz-swap';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../wallet/config.js';
+import { walletConfigFromNetwork } from '../wallet/config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { createL402Gateway } from './gateway.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 const BACKEND_PORT = 3097;
 const GATEWAY_PORT = 8497;

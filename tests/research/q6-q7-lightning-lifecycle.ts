@@ -102,7 +102,6 @@ async function main() {
   const stopNotify = await readonlyWallet.notifyIncomingFunds((funds) => {
     const ts = new Date().toISOString();
     notifications.push({ ts, type: funds.type });
-    console.log(`   [${ts}] NOTIFICATION: ${funds.type}`);
     if (funds.type === 'vtxo') {
       console.log(`     New VTXOs: ${funds.newVtxos.length}, Spent VTXOs: ${funds.spentVtxos.length}`);
     }
@@ -149,7 +148,6 @@ async function main() {
     try {
       const status = await getBoltzStatus(swapId);
       if (status.status !== lastStatus) {
-        console.log(`   [${elapsed}s] Status changed: ${lastStatus || 'initial'} → ${status.status}`);
         statusHistory.push({ ts: new Date().toISOString(), status: status.status, elapsed });
         lastStatus = status.status;
 
@@ -157,14 +155,13 @@ async function main() {
         console.log('   Full status:', JSON.stringify(status, null, 2));
       }
     } catch (e: any) {
-      console.log(`   [${elapsed}s] Status check error:`, e.message);
+      // Status check failed silently
     }
 
     // Check wallet state
     const bal = await readonlyWallet.getBalance();
     const vtxos = await readonlyWallet.getVtxos();
     if (bal.total !== initialBalance.total || vtxos.length !== initialVtxos.length) {
-      console.log(`   [${elapsed}s] WALLET STATE CHANGED!`);
       console.log(`     Balance: ${initialBalance.total} → ${bal.total}`);
       console.log(`     VTXOs: ${initialVtxos.length} → ${vtxos.length}`);
     }

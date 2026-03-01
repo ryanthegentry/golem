@@ -63,7 +63,7 @@
   }
 
   function updateBoardingBanner() {
-    var banner = $('#boarding-banner');
+    let banner = $('#boarding-banner');
     if (!balance || !balance.boarding || balance.boarding.total <= 0) {
       banner.style.display = 'none';
       return;
@@ -277,13 +277,13 @@
   // --- Onboard ---
 
   $('#btn-onboard').addEventListener('click', async () => {
-    var btn = $('#btn-onboard');
+    let btn = $('#btn-onboard');
     btn.disabled = true;
     btn.textContent = 'Boarding...';
 
     try {
-      var res = await fetch('/api/onboard', { method: 'POST' });
-      var data = await res.json();
+      let res = await fetch('/api/onboard', { method: 'POST' });
+      let data = await res.json();
 
       if (!res.ok) {
         btn.textContent = 'Error';

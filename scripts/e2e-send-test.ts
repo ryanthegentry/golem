@@ -13,8 +13,11 @@ import { EventSource } from 'eventsource';
 
 import { MockSigner } from '../src/signer/mock-signer.js';
 import { GolemWallet } from '../src/wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../src/wallet/config.js';
+import { walletConfigFromNetwork } from '../src/wallet/config.js';
+import { getNetworkConfig } from '../src/config/networks.js';
 import { OorLimitExceededError } from '../src/wallet/errors.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
@@ -78,9 +81,7 @@ async function main() {
 
   // Step 3: Board sender into Ark
   console.log('\n3. Boarding sender into Ark...');
-  const boardTxid = await sender.settle(undefined, (event) => {
-    console.log(`  [settle] ${event.type}`);
-  });
+  const boardTxid = await sender.settle(undefined);
   console.log(`  Commitment txid: ${boardTxid}`);
 
   // Check sender balance

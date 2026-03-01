@@ -7,7 +7,7 @@ Ark is a Bitcoin L2. Users hold VTXOs (virtual UTXOs) off-chain. VTXOs expire on
 ## Rounds
 
 1. ASP initiates a round
-2. Users (or agents via delegation) join
+2. Users (or agents) join
 3. Together construct a transaction tree: one on-chain root, off-chain branch/leaf txs
 4. Each VTXO is a leaf — a pre-signed path for unilateral on-chain claim
 5. Users forfeit old VTXOs, receive new ones with fresh timelocks
@@ -51,7 +51,7 @@ If ASP goes down, users can claim on-chain using pre-signed transaction trees. R
 
 ## Delegation Primitive (Arkade Intents)
 
-**Status:** Live in arkd v0.7.0+ (Go server). Low-level primitives in published TS SDK. High-level orchestration on unpublished `delegate` branch only.
+**Status: Deferred for Golem.** Delegation is live in the Ark protocol but Golem is targeting covenant-based keyless receive (Phase 1.5) instead. Delegation becomes irrelevant for the provider use case once covenants ship. See `docs/architecture.md` for the covenant design.
 
 Delegation uses **Arkade Intents** — BIP322-style ownership proofs combined with partial forfeit transactions. This is NOT a "present a credential to the ASP" model. The delegate is an active round participant.
 
@@ -79,6 +79,10 @@ Delegation uses **Arkade Intents** — BIP322-style ownership proofs combined wi
 
 Delegation is constrained to "refresh to same owner" by design. The owner pre-signs a transaction to themselves — the delegate cannot change the output destination. Compromised delegate = DoS only (failing to refresh), NOT fund theft.
 
+### Why deferred for Golem
+
+Delegation requires monthly provisioning from the user's phone. "Just refresh from the app" achieves the same outcome with dramatically less complexity. With the covenant plan, the server doesn't need delegation if it never signs.
+
 ### SDK primitives available (v0.3.13)
 
 | Primitive | Export | Status |
@@ -90,12 +94,56 @@ Delegation is constrained to "refresh to same owner" by design. The owner pre-si
 | `combineTapscriptSigs(signedTx, originalTx)` | Yes | Usable |
 | High-level delegation flow | No | Only on unpublished `delegate` branch |
 
-## Arkade Platform Roadmap (per Tiero, Feb 25, 2026)
+## Covenant Claim Scripts (Phase 1.5)
+
+**Target architecture for keyless Lightning receive.** Gated on Arkade introspection opcodes.
+
+### The Three Opcodes
+
+Arkade's custom introspection opcodes enable covenant-restricted VHTLC claim scripts:
+
+| Opcode | Number | Purpose |
+|--------|--------|---------|
+| `OP_INSPECTOUTPUTSCRIPTPUBKEY` | OP_SUCCESS209 | Verifies output pays to user's exact taproot address |
+| `OP_INSPECTOUTPUTVALUE` | OP_SUCCESS207 | Verifies output contains correct amount |
+| `OP_INSPECTNUMOUTPUTS` | OP_SUCCESS213 | Constrains transaction to single output |
+
+These are the same opcodes Arkade already uses internally for `unroll.hack` shared output scripts. No compiler needed — raw tapscript byte construction, ~50-60 bytes.
+
+### How It Works for Golem
+
+1. Boltz reverse swap creates a VHTLC with a covenant-restricted claim path
+2. Claim daemon (a mode of the existing SwapManager) detects the VHTLC
+3. Constructs a claim transaction using just the preimage (no signing key needed)
+4. Covenant opcodes verify the output pays to the user's address with the correct amount
+5. ASP accepts the transaction — sats arrive as a VTXO
+
+### Open Questions
+
+- Can the Arkade-Boltz gateway support covenant-restricted VHTLCs? (asked Tiero, awaiting answer)
+- Does `createLightningInvoice()` require the signing key, or just a pubkey?
+
+See also: [Arkade Contracts Deep Dive](https://docs.arkadeos.com/contracts/deep-dive)
+
+## Claw Cash
+
+**Claw Cash** (https://clw.cash/) is Tiero's own agent wallet on Ark. Key characteristics:
+
+- **Custodial:** Uses Evervault Enclave (not raw AWS Nitro). Not self-custodial.
+- **Same Boltz pattern:** Uses the same `SwapManager` and `@arkade-os/boltz-swap` that Golem uses.
+- **No advanced security:** No multisig, no covenants, no L402, no delegation.
+- **Complementary, not competitive:** Claw Cash = custodial convenience, Golem = self-custodial with L402 standard.
+- **Tiero actively helping:** Tiero is directly helping design Golem's architecture, confirming he sees the two as complementary.
+
+Claw Cash is useful as a reference for the "hot key on server" security model — it's the same approach Golem uses in Phase 1, validated by the Ark protocol creator himself.
+
+## Arkade Platform Roadmap (per Tiero, Feb 25–26, 2026)
 
 | Capability | Status | Timeline |
 |---|---|---|
 | Delegation | Live in arkd v0.7.0+, primitives in TS SDK, orchestration on unpublished branch | Pending |
 | Assets (stablecoins) | Current focus | Mid-March 2026 |
+| Introspection opcodes | Required for covenant claims. Same opcodes used internally by `unroll.hack`. | "Before this quarter ends" = March 2026 |
 | Full opcodes | After assets | March-April 2026 |
 | Swaps, lending, Fuji | Written, pending deploy | April-May 2026 |
 | Cross-chain stablecoins | Parallel development | TBD |
@@ -107,10 +155,18 @@ Ark Labs explicitly wants third parties to build neobanks and fintechs on Arkade
 - **Ark Labs** — Protocol developers. Build Arkade (Go). Their wallet = Arkade Money.
 - **Second** — SEPARATE company. Independent Ark implementation in Rust. Different team, different codebase.
 - **Boltz** — Non-custodial swap provider. Lightning↔Bitcoin↔Liquid↔Rootstock. KYC-free.
+- **Claw Cash** — Tiero's custodial agent wallet on Ark. Same Boltz SwapManager pattern. Complementary to Golem.
+- **MoneyDevKit** — Different market entirely (serverless Lightning checkout for merchants, built on LDK). Not a competitor. Not tracking.
 
 ## Boltz Integration (Onboarding)
 
-`@arkade-os/boltz-swap` provides Lightning→Ark submarine swaps.
+`@arkade-os/boltz-swap` provides Lightning↔Ark swaps.
+
+**Arkade-Boltz gateway minimums and fees:**
+- Minimum swap: **500 sats** both directions (NOT standard Boltz's 50,000)
+- Submarine swap (Lightning→Ark): **0.01% fee**
+- Reverse swap (Ark→Lightning): **0.4% fee**
+- This makes per-request L402 payments economically viable ($0.002/request ≈ 3 sats)
 
 ```javascript
 import { Wallet, SingleKey } from '@arkade-os/sdk';
@@ -135,13 +191,12 @@ await arkadeLightning.sendLightningPayment({ invoice: 'lnbc...' });
 const limits = await arkadeLightning.getLimits();
 ```
 
-Fees: ~0.1-0.5% depending on direction. Non-custodial. KYC-free.
-
 ## SDK Resources
 
 - Ark Labs Wallet SDK: https://github.com/ArkLabsHQ/wallet-sdk
 - Arkade Boltz integration: https://github.com/arkade-os/boltz-swap
 - Ark Labs docs: https://docs.arklabs.xyz/
+- Arkade Contracts Deep Dive: https://docs.arkadeos.com/contracts/deep-dive
 - Ark Protocol spec: https://ark-protocol.org/
 - Bitcoin Optech on Ark: https://bitcoinops.org/en/topics/ark/
 

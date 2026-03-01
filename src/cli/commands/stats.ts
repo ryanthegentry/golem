@@ -3,6 +3,7 @@
  */
 
 import { Command } from 'commander';
+import { exitWithError } from '../wallet.js';
 
 export const statsCommand = new Command('stats')
   .description('Show L402 gateway stats')
@@ -12,10 +13,14 @@ export const statsCommand = new Command('stats')
     const url = `http://localhost:${port}/stats`;
 
     try {
-      const res = await fetch(url);
+      const headers: Record<string, string> = {};
+      const apiKey = process.env.GOLEM_API_KEY;
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+      const res = await fetch(url, { headers });
       if (!res.ok) {
-        console.error(`Error: Gateway returned ${res.status}`);
-        process.exit(1);
+        exitWithError(`Gateway returned ${res.status}`);
       }
 
       const stats = await res.json() as Record<string, number>;
@@ -39,11 +44,10 @@ export const statsCommand = new Command('stats')
         }
       }
     } catch (err) {
-      if (err instanceof TypeError && (err as any).cause?.code === 'ECONNREFUSED') {
-        console.error(`Error: Gateway not running on port ${port}.`);
+      if (err instanceof TypeError && (err as TypeError & { cause?: { code?: string } }).cause?.code === 'ECONNREFUSED') {
+        exitWithError(`Gateway not running on port ${port}.`);
       } else {
-        console.error(`Error: Could not reach gateway at ${url}`);
+        exitWithError(`Could not reach gateway at ${url}`);
       }
-      process.exit(1);
     }
   });

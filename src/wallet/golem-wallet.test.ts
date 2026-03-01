@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { hex } from '@scure/base';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from './golem-wallet.js';
-import { MUTINYNET_CONFIG } from './config.js';
+import { walletConfigFromNetwork } from './config.js';
+import { getNetworkConfig } from '../config/networks.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 /**
  * Integration tests that connect to the live mutinynet Ark server.

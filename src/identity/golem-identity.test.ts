@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { Transaction, p2tr } from '@scure/btc-signer';
+import { p2tr } from '@scure/btc-signer';
 import { Transaction as ArkTransaction } from '@arkade-os/sdk';
-import { hex } from '@scure/base';
 import { schnorr, verifyAsync, etc } from '@noble/secp256k1';
 import { GolemIdentity } from './golem-identity.js';
 import { MockSigner } from '../signer/mock-signer.js';

@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 
 // EventSource polyfill — MUST come before any Ark SDK imports
-import { EventSource } from 'eventsource';
-(globalThis as any).EventSource ??= EventSource;
+import '../polyfills.js';
+
+// Load ~/.golem/.env before anything else (TELEGRAM_*, GOLEM_PASSWORD, etc.)
+import * as dotenv from 'dotenv';
+import * as os from 'node:os';
+import * as path from 'node:path';
+dotenv.config({ path: path.join(os.homedir(), '.golem', '.env') });
 
 // Global error handlers — clean output instead of stack traces
 process.on('uncaughtException', (err) => {
@@ -20,6 +25,12 @@ import { balanceCommand } from './commands/balance.js';
 import { gatewayCommand } from './commands/gateway.js';
 import { statsCommand } from './commands/stats.js';
 import { payCommand } from './commands/pay.js';
+import { safeHarborCommand } from './commands/safe-harbor.js';
+import { exitCommand } from './commands/exit.js';
+import { reserveCommand } from './commands/reserve.js';
+import { serveCommand } from './commands/serve.js';
+import { sweepCommand } from './commands/sweep.js';
+import { receiveCommand } from './commands/receive.js';
 
 const program = new Command()
   .name('golem')
@@ -31,5 +42,11 @@ program.addCommand(balanceCommand);
 program.addCommand(gatewayCommand);
 program.addCommand(statsCommand);
 program.addCommand(payCommand);
+program.addCommand(safeHarborCommand);
+program.addCommand(exitCommand);
+program.addCommand(reserveCommand);
+program.addCommand(serveCommand);
+program.addCommand(sweepCommand);
+program.addCommand(receiveCommand);
 
 program.parse();

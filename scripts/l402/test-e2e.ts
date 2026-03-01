@@ -14,9 +14,12 @@ import { serve } from '@hono/node-server';
 import { ArkadeLightning, BoltzSwapProvider } from '@arkade-os/boltz-swap';
 import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
-import { MUTINYNET_CONFIG } from '../wallet/config.js';
+import { walletConfigFromNetwork } from '../wallet/config.js';
+import { getNetworkConfig } from '../config/networks.js';
 import { createL402Gateway } from './gateway.js';
 import { mintL402Macaroon, MemoryRootKeyStore } from './macaroon.js';
+
+const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
 const BACKEND_PORT = 3099;
 const GATEWAY_PORT = 8499;
@@ -43,7 +46,6 @@ function startBackend() {
   });
 
   return serve({ fetch: app.fetch, port: BACKEND_PORT, hostname: '0.0.0.0' }, () => {
-    console.log(`[backend] Mock API on :${BACKEND_PORT}`);
   });
 }
 
@@ -103,7 +105,6 @@ async function startGateway() {
   });
 
   const server = serve({ fetch: app.fetch, port: GATEWAY_PORT, hostname: '0.0.0.0' }, () => {
-    console.log(`[gateway] L402 gateway on :${GATEWAY_PORT} → :${BACKEND_PORT} ${arkAddress ? '(dual-mode)' : '(Lightning only)'}`);
   });
 
   return { server, gateway, rootKeyStore, lightning };

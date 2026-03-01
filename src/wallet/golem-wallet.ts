@@ -1,10 +1,11 @@
-import { Wallet, VtxoManager, Ramps } from '@arkade-os/sdk';
+import { Wallet, VtxoManager, Ramps, OnchainWallet, Unroll } from '@arkade-os/sdk';
 import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
-import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction } from '@arkade-os/sdk';
+import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction, NetworkName } from '@arkade-os/sdk';
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
 import type { GolemWalletConfig } from './config.js';
 import { OorLimitExceededError } from './errors.js';
+import { DEFAULT_RESERVE_PER_VTXO } from '../config/defaults.js';
 
 /**
  * Golem wallet — wraps the Ark SDK Wallet with GolemIdentity.
@@ -16,6 +17,8 @@ import { OorLimitExceededError } from './errors.js';
 export class GolemWallet {
   private readonly oorLimitFraction: number;
   private readonly oorLimitMinSats: number;
+  private readonly networkName: NetworkName;
+  private onchainWallet: OnchainWallet | null = null;
 
   private constructor(
     private readonly signer: GolemSigner,
@@ -26,6 +29,7 @@ export class GolemWallet {
   ) {
     this.oorLimitFraction = config.oorLimitFraction;
     this.oorLimitMinSats = config.oorLimitMinSats;
+    this.networkName = config.networkName;
   }
 
   /**
@@ -150,6 +154,113 @@ export class GolemWallet {
   async sendBitcoin(params: { address: string; amount: number }): Promise<string> {
     await this.enforceOorLimit(params.amount);
     return this.sdkWallet.sendBitcoin(params);
+  }
+
+  /**
+   * Get or create the OnchainWallet (lazy — same Identity, separate P2TR address).
+   * Used for on-chain reserve balance and AnchorBumper during unilateral exit.
+   */
+  async getOrCreateOnchainWallet(): Promise<OnchainWallet> {
+    if (!this.onchainWallet) {
+      this.onchainWallet = await OnchainWallet.create(
+        this.identity,
+        this.networkName,
+        this.sdkWallet.onchainProvider,
+      );
+    }
+    return this.onchainWallet;
+  }
+
+  /** On-chain reserve balance (sats held for AnchorBumper fee-bump txs). */
+  async getOnchainReserveBalance(): Promise<number> {
+    const ocw = await this.getOrCreateOnchainWallet();
+    return ocw.getBalance();
+  }
+
+  /** Required on-chain reserve based on current VTXO count. */
+  async getRequiredReserve(): Promise<{ required: number; vtxoCount: number; perVtxo: number }> {
+    const vtxos = await this.getVtxos();
+    return {
+      required: vtxos.length * DEFAULT_RESERVE_PER_VTXO,
+      vtxoCount: vtxos.length,
+      perVtxo: DEFAULT_RESERVE_PER_VTXO,
+    };
+  }
+
+  /**
+   * Exit ALL funds to an on-chain safe harbor address.
+   *
+   * Strategy:
+   * 1. Shut down L402 gateway (mandatory — no new payments during exit)
+   * 2. Try cooperative offboard (fast, requires ASP online)
+   * 3. Fall back to unilateral unroll (slow, always works if on-chain reserve exists)
+   *
+   * NOTE: Unilateral exit assumes pre-signed tx tree data is available in local storage.
+   * If wallet data dir is lost, unilateral exit is impossible.
+   * TODO: Premium tier: S3 backup of data dir. Free tier: "back up data dir" warning.
+   *
+   * TODO: Reserve fee rate uses static 10 sat/vbyte estimate. Replace with dynamic
+   * fee estimation when mempool monitoring ships (research-priorities #11).
+   */
+  async exitToSafeHarbor(
+    safeHarborAddress: string,
+    gateway?: { shutdown(): void },
+    eventCallback?: (event: SettlementEvent) => void,
+  ): Promise<{ txid: string; method: 'offboard' | 'unroll' }> {
+    // 1. Shut down gateway immediately — no new 402 challenges
+    if (gateway) {
+      gateway.shutdown();
+    }
+
+    // 2. Try cooperative offboard first (fast, ASP required)
+    try {
+      const info = await this.sdkWallet.arkProvider.getInfo();
+      const txid = await new Ramps(this.sdkWallet).offboard(
+        safeHarborAddress, info.fees, undefined, eventCallback,
+      );
+      return { txid, method: 'offboard' };
+    } catch (offboardError) {
+      const offboardMsg = offboardError instanceof Error ? offboardError.message : String(offboardError);
+      console.warn(`Cooperative offboard failed: ${offboardMsg}. Falling through to unilateral exit.`);
+    }
+
+    // 3. Unilateral exit — broadcast pre-signed tx trees, wait for CSV, spend
+    const ocw = await this.getOrCreateOnchainWallet();
+    const reserve = await ocw.getBalance();
+    const vtxos = await this.getVtxos();
+    const requiredReserve = vtxos.length * DEFAULT_RESERVE_PER_VTXO;
+
+    if (reserve < requiredReserve) {
+      throw new Error(
+        `Unilateral exit requires on-chain reserve. ` +
+        `Current: ${reserve} sats, Required: ~${requiredReserve} sats for ${vtxos.length} VTXOs. ` +
+        `Cooperative offboard also failed (ASP unreachable).`
+      );
+    }
+
+    // Unroll each VTXO — broadcast tree transactions with fee bumps
+    const unrolledTxids: string[] = [];
+    for (const vtxo of vtxos) {
+      const session = await Unroll.Session.create(
+        { txid: vtxo.txid, vout: vtxo.vout },
+        ocw,
+        this.sdkWallet.onchainProvider,
+        this.sdkWallet.indexerProvider,
+      );
+
+      for await (const step of session) {
+        await step.do();
+        if (step.type === Unroll.StepType.DONE) {
+          unrolledTxids.push(step.vtxoTxid);
+        }
+      }
+    }
+
+    // Complete unroll — spend CSV path to safe harbor address
+    const txid = await Unroll.completeUnroll(
+      this.sdkWallet, unrolledTxids, safeHarborAddress,
+    );
+    return { txid, method: 'unroll' };
   }
 
   /**

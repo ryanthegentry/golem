@@ -168,7 +168,7 @@ async function main() {
 async function runLivePaymentTest(
   invoiceResult: any,
   readonlyWallet: ReadonlyWallet,
-  swapProvider: BoltzSwapProvider,
+  _swapProvider: BoltzSwapProvider,
   voltageMacaroon: string,
 ) {
   const macaroonHex = Buffer.from(voltageMacaroon, 'base64').toString('hex');

@@ -31,7 +31,7 @@ export class MockSigner implements GolemSigner {
   readonly #secretKey: Uint8Array;
   readonly #publicKey: Uint8Array;
 
-  private constructor(secretKey: Uint8Array) {
+  protected constructor(secretKey: Uint8Array) {
     this.#secretKey = secretKey;
     this.#publicKey = getPublicKey(secretKey, true);
   }
