@@ -139,7 +139,7 @@ This is the straightforward case. The design below targets Phase 1.
 Exit responsibility moves to the mobile app:
 - Agent detects emergency, sends push notification to mobile app
 - Mobile app holds the only signing key, executes the exit
-- 30-day VTXO expiry gives ~weeks of buffer for the user to respond
+- VTXO expiry (7 days mainnet, ~4 weeks mutinynet) gives buffer for the user to respond
 
 This is a Phase 1.5 design problem, not Phase 1. For now, the server can handle exits directly.
 

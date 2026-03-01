@@ -371,7 +371,7 @@ export function createL402Gateway(
         });
 
         // Random 1-99 sat suffix to disambiguate concurrent payments
-        const arkAmount = priceSats + Math.floor(Math.random() * 99) + 1;
+        const arkAmount = priceSats + (randomBytes(1)[0] % 99) + 1;
 
         const pending: PendingArkPayment = {
           paymentId,

@@ -388,7 +388,7 @@ Weave these into the conversation naturally. Don't read them as a list.
 
 4. **L402 is the monetization primitive.** HTTP 402 + macaroons + Lightning. Stateless, machine-to-machine, no accounts. Perfect for APIs, AI agents, IoT.
 
-5. **Built on your SDK.** GolemWallet wraps `@arkade-os/sdk`. GolemIdentity bridges `GolemSigner` to the SDK's `Identity` interface. 93 tests passing. Filed 3 SDK bugs along the way (#310, #311, #312).
+5. **Built on your SDK.** GolemWallet wraps `@arkade-os/sdk`. GolemIdentity bridges `GolemSigner` to the SDK's `Identity` interface. 336 tests passing. Filed 3 SDK bugs along the way (#310, #311, #312).
 
 ---
 
