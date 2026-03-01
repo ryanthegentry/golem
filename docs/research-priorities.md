@@ -1,10 +1,32 @@
-# Golem — Open Research Priorities (v6)
+# Golem — Open Research Priorities (v7)
 
-Questions and investigations identified during red team review and subsequent development. Ordered by criticality. Updated with covenant architecture direction and delegation demotion (Feb 26, 2026).
+Questions and investigations identified during red team review and subsequent development. Ordered by criticality. Updated with Phase 2 covenant gating questions, co-founder meeting prep, and new P2 items (March 1, 2026).
 
 ---
 
-## P0: Must Answer Before Writing Significant Code
+## P0: Must Answer Before Phase 2 (Covenant Mode)
+
+### 1. Round/Forfeit + Covenant VTXO Compatibility
+**Status:** Scheduled for Tiero call (this week)
+**Source:** Roadmap v3 red team analysis, March 1, 2026
+**Question:** When a covenant VTXO participates in an Ark round, does the forfeit transaction satisfy or violate the recursive covenant? This is THE blocking question for the entire covenant architecture. If the forfeit tx violates the covenant script, VTXOs become unrefreshable — which means covenants and rounds are incompatible, and the entire Phase 2 architecture needs rethinking.
+**Action:** Confirm with Tiero on scheduled call. If incompatible, evaluate workarounds (e.g., covenant-aware forfeit construction, separate covenant leaf for round participation).
+
+### 2. Arkade Introspection Opcode Ship Date
+**Status:** Directional timeline only ("before this quarter ends")
+**Source:** Tiero conversation, March 1, 2026
+**Question:** What is the specific ship date for introspection opcodes exposed to user-constructed scripts? The Arkade VM evaluates these opcodes internally already — when are they exposed for external use? Gates all of Phase 2.
+**Action:** Pin down specific date on Tiero call.
+
+### 3. OP_SUCCESS Semantic Edge Cases
+**Status:** Needs research
+**Source:** Roadmap v3 red team analysis, March 1, 2026
+**Question:** Does the Arkade VM ever fall through to Bitcoin's unconditional-success behavior for OP_SUCCESS-prefixed opcodes? If so, the covenant could be bypassed — any spend would be valid. The introspection opcodes (OP_SUCCESS202, OP_SUCCESS207, OP_SUCCESS209, OP_SUCCESS213) MUST fail when their conditions aren't met, not succeed unconditionally.
+**Action:** Review Arkade VM source. Test with deliberately invalid covenant transactions.
+
+---
+
+## P0-Resolved: Pre-Phase-1 Items (All Resolved)
 
 ### NEW: Covenant VHTLC Boltz Support
 **Status:** OPEN — asked Tiero, awaiting answer
@@ -41,7 +63,7 @@ Questions and investigations identified during red team review and subsequent de
 - `src/wallet/golem-wallet.ts` — `exitToSafeHarbor()` two-path fallback
 - `src/agent/refresh-agent.ts` — emergency exit threshold monitoring, consecutive failure tracking
 - `src/utils/address-validation.ts` — full checksum + network validation
-- 29 new tests (146 total), zero TypeScript errors
+- 29 safe harbor tests (336 total), zero TypeScript errors
 
 ### 1. Delegation Primitive Scope and Semantics
 **Status:** DEFERRED (Feb 26, 2026) — Protocol-level resolution holds, but delegation is no longer the target architecture. Covenant-based keyless receive (Phase 1.5) is the path. Delegation becomes relevant only if covenants slip significantly.
@@ -146,7 +168,7 @@ Previously blocked on SDK orchestration. Now irrelevant for the target architect
 **Agent path (Jake):** Agent wallet has hot key with spending caps. When balance justifies, user sweeps to mobile wallet. No delegation credential needed — mobile app handles refresh directly.
 
 ### 12. L402 Gateway Prototype
-**Status:** RESOLVED — Fully built, dual-mode (Lightning + Ark-native OOR), security hardened. 117 tests. lnget wire compatible.
+**Status:** RESOLVED — Fully built, dual-mode (Lightning + Ark-native OOR), security hardened. 336 tests. lnget wire compatible.
 **Source:** Red Team, L402 implementation sessions (Feb 25–26, 2026)
 
 **Components:**
@@ -178,6 +200,31 @@ The low-level primitives exist in the published SDK (v0.3.13), but the orchestra
 
 Delegation requires monthly provisioning from the phone, making its UX burden equivalent to just refreshing from the app directly. The covenant path eliminates the need for delegation entirely on the receive side.
 
+### 16. Pika Integration Architecture
+**Status:** Open design question
+**Source:** March 1, 2026 — Ben Carman and Justin Moon are building Pika (Nostr-based encrypted agent messaging)
+**Question:** How do Pika and Golem fit together? Options: (a) Pika replaces Telegram for monitoring, (b) Pika is mobile app for send, (c) separate products under one company, (d) Golem is infrastructure that Pika integrates as client.
+**Note:** Meeting devs where they are (Telegram) matters. Pika shouldn't replace Telegram for human-to-agent monitoring.
+**Action:** Discuss at Ben/Justin meeting.
+
+### 17. Stablecoin Integration Planning
+**Status:** Not started
+**Source:** March 1, 2026
+**Question:** What does stablecoin support look like in Golem? Fuji (BTC-backed stablecoin) shipping in weeks. USDT0 team close to Ark Labs. Taproot Assets supported for major stablecoin issuance. Biggest TAM expansion catalyst.
+**Action:** Research Fuji and Taproot Assets integration paths. Determine SDK support requirements.
+
+### 18. Mainnet ASP Uptime and Reliability
+**Status:** Unknown
+**Source:** March 1, 2026
+**Question:** What is arkade.computer's actual uptime history? With 7-day VTXO expiry on mainnet, a multi-day ASP outage = fund loss risk for users who can't unilaterally exit in time. Single point of failure until multi-ASP support (Phase 3).
+**Action:** Ask Tiero for uptime data. Set up independent monitoring. Design alerting for ASP unreachability.
+
+### 19. Regulatory Requirements for L402 Gateway
+**Status:** Not started
+**Source:** March 1, 2026
+**Question:** Does the L402 gateway model constitute money transmission? The gateway receives Lightning payments and converts them to Ark VTXOs. Samourai precedent implications for non-custodial infrastructure operators. Must answer before mainnet launch with real users.
+**Action:** Identify Bitcoin-focused fintech attorneys. Consolidate with #13 (Fintech Attorney Consultation).
+
 ---
 
 ## Demoted / Deferred Concepts
@@ -191,6 +238,7 @@ Concepts that were actively explored and consciously deprioritized:
 | Golem Swap Server | Rejected | Covenants solve the problem natively. No need for a custom intermediary. |
 | Delegation SDK Timeline (#14) | Deferred | No longer blocking. Not tracking. |
 | Delegation Provisioning UX (#15) | Deferred | Moot if covenants ship. |
+| Golem Service Directory | Deferred to Phase 3 | 402index.io serves this function for now. Internal directory deferred. |
 
 ---
 
@@ -243,3 +291,13 @@ All P0 items resolved with live validation on mutinynet. End-to-end testing cove
 | Boltz + Arkade testnet (P0 #3)? | `@arkade-os/boltz-swap@0.2.20` works on mutinynet. Invoice creation, limits, fees all verified. GolemLightning wrapper in `src/lightning/`. |
 | Tax reporting data (former #10)? | Ensure all agent actions are logged with timestamps, amounts, and counterparties. Research whether refreshes constitute taxable events (likely no, but confirm with attorney). |
 | Golem swap server concept? | Rejected. Covenants solve the problem natively. |
+| Tiero covenant validation? | "Yes more or less he's right." Directional confirmation. Call scheduled for implementation details. (Mar 1, 2026) |
+| Recursive covenant feasibility? | OP_INSPECTINPUTSCRIPTPUBKEY (202) + OP_INSPECTOUTPUTSCRIPTPUBKEY (209) confirmed in published Arkade Script docs. (Mar 1, 2026) |
+| x402 competitive landscape? | 12K+ endpoints, ~500K payments/week, Coinbase/Cloudflare backing. Stablecoin-first. Different trust model. (Feb 27) |
+| Boltz Arkade mainnet API URL? | `https://api.ark.boltz.exchange` (confirmed by Tiero + live API). (Feb 27) |
+| Mainnet swap minimums? | 333 sats reverse, 333 sats submarine, 0.25% fee, zero miner fee. (Feb 27) |
+| Mainnet VTXO expiry? | 7 days (not 4 weeks). Boarding exit: 90 days. (Feb 27) |
+| SDK mainnet support? | @arkade-os/sdk v0.3.13 handles bitcoin network. Boltz-swap needs explicit apiUrl. (Feb 27) |
+| ServerSigner encryption? | Built. AES-256-GCM, scrypt N=2^17, async for servers, sync for CLI. 336 tests. (Feb 26) |
+| lnget compatibility? | Tested. Three bugs found and fixed. 66-byte identifier, LSAT prefix, signet mapping. (Feb 26) |
+| Safe harbor design? | Built. Cooperative offboard + unilateral fallback. 29 tests. (Feb 26) |

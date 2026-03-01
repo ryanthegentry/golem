@@ -1,7 +1,7 @@
 # Golem Architecture Overview
 
 **Date:** 2026-02-26
-**Milestone:** CLI + dual-mode L402 gateway complete. 117 tests passing, zero TypeScript errors. Commands: `golem init`, `golem balance`, `golem gateway`, `golem stats`, `golem pay`. L402 gateway with V2 binary macaroons (`macaroon` npm package), per-macaroon root keys, time-before caveats, constant-time preimage verification, IP rate limiting. Dual-mode payment: Lightning (via Boltz) + Ark-native OOR. lnget wire compatibility validated. Live Lightning and Ark OOR payments validated end-to-end on mutinynet. Covenant-based keyless receive (Phase 1.5) designed, gated on Arkade introspection opcodes (March 2026).
+**Milestone:** CLI + dual-mode L402 gateway complete. 336 tests passing, zero TypeScript errors. Commands: `golem init`, `golem balance`, `golem gateway`, `golem stats`, `golem pay`. L402 gateway with V2 binary macaroons (`macaroon` npm package), per-macaroon root keys, time-before caveats, constant-time preimage verification, IP rate limiting. Dual-mode payment: Lightning (via Boltz) + Ark-native OOR. lnget wire compatibility validated. Live Lightning and Ark OOR payments validated end-to-end on mutinynet. Covenant-based keyless receive (Phase 1.5) designed, gated on Arkade introspection opcodes (March 2026).
 
 ---
 

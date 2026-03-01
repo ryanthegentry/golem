@@ -1,6 +1,6 @@
 # Golem
 
-Agent-managed self-custodial Bitcoin wallet on Ark protocol. VTXOs expire on ~4 week timelocks. If users don't refresh, they lose their bitcoin. Golem is an AI agent that automates this.
+Agent-managed self-custodial Bitcoin wallet on Ark protocol. VTXOs expire on protocol-defined timelocks (7 days mainnet, ~4 weeks testnet). If users don't refresh, they lose their bitcoin. Golem is an AI agent that automates this.
 
 ## Architecture (Non-Negotiable)
 
@@ -88,7 +88,7 @@ Dual-mode L402 reverse proxy backed by Ark — no LND required. Two payment rail
 - `src/l402/gateway.ts` — Hono middleware: dual-mode 402 challenges + L402 token verification + IP rate limiting + VTXO listener for Ark OOR detection.
 - `src/l402/gateway-server.ts` — Standalone server with upstream proxy, FileRootKeyStore, security headers (env-configurable).
 
-**Live test results:** Lightning: Voltage LND → Boltz reverse swap → Ark wallet. Ark OOR: direct VTXO send → gateway detection → preimage reveal. Both rails validated end-to-end on mutinynet. 146 tests (44 security tests, 29 safe harbor tests).
+**Live test results:** Lightning: Voltage LND → Boltz reverse swap → Ark wallet. Ark OOR: direct VTXO send → gateway detection → preimage reveal. Both rails validated end-to-end on mutinynet. 336 tests passing.
 
 **Liquidity setup for testing:** Keysend (LND→faucet for inbound) → submarine swap (Ark→LND for Boltz ARK liquidity) → reverse swap (LND→Ark for L402 payment). All three directions must have liquidity.
 
@@ -151,7 +151,7 @@ These are the same opcodes Arkade already uses internally for `unroll.hack` shar
 
 **Claim daemon:** A mode of the existing SwapManager/agent. Detects incoming VHTLCs, constructs covenant-valid claim transactions using just the preimage (no signing), submits to ASP. ~2-3 days of CC work once opcodes are live.
 
-**Impact on provider flow (Marcus):** Server NEVER holds a signing key after init. `golem init` generates keypair, shows seed phrase, deletes key from server. Server runs in receive-only mode forever. Mobile app holds the only signing key, handles refresh when user opens it (~monthly). 30-day VTXO expiry = natural onboarding funnel to the mobile app.
+**Impact on provider flow (Marcus):** Server NEVER holds a signing key after init. `golem init` generates keypair, shows seed phrase, deletes key from server. Server runs in receive-only mode forever. Mobile app holds the only signing key, handles refresh when user opens it. 7-day VTXO expiry (mainnet) = natural onboarding funnel to the mobile app.
 
 **Open questions:** Can the Arkade-Boltz gateway support covenant-restricted VHTLCs? (Awaiting Tiero — this is the remaining Phase 1.5 gating unknown.)
 

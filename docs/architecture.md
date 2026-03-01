@@ -121,8 +121,8 @@ With covenants, server NEVER holds a signing key:
 1. `golem init` generates keypair, shows seed phrase, deletes key from server
 2. Server runs in receive-only mode forever
 3. Claim daemon detects incoming VHTLCs, constructs covenant-valid claims
-4. Mobile app holds the only signing key, handles refresh when user opens it (~monthly)
-5. 30-day VTXO expiry = natural onboarding funnel to the mobile app
+4. Mobile app holds the only signing key, handles refresh when user opens it
+5. 7-day VTXO expiry (mainnet) = natural onboarding funnel to the mobile app
 
 ### Open Questions
 
@@ -164,7 +164,7 @@ Tiero confirmed ASP enforcement: "That's the whole Point of Arkade :) you write 
 ### Upgrade Paths
 
 **Provider path (Marcus — API monetization):**
-Server runs receive-only after init. User imports seed into mobile app. No sweep needed — server continues receive-only via covenant claim daemon (Phase 1.5). Mobile app handles refresh when user opens it (~monthly). 30-day VTXO expiry is the conversion event that drives mobile app adoption.
+Server runs receive-only after init. User imports seed into mobile app. No sweep needed — server continues receive-only via covenant claim daemon (Phase 1.5). Mobile app handles refresh when user opens it. 7-day VTXO expiry (mainnet) is the conversion event that drives mobile app adoption.
 
 **Agent path (Jake — AI agent spending):**
 Agent wallet has hot key (AgentSigner) with spending caps. When balance grows to justify hardware, user sweeps to mobile wallet. No delegation credential needed — mobile app handles refresh directly.
@@ -233,7 +233,7 @@ Pattern proven by OpenClaw Railway templates. See: https://railway.com/deploy/op
 - **Pro ($10-20/mo):** Managed hosting, premium alerting, consolidation optimization.
 - **Premium ($30-50/mo):** Pro + encrypted tx tree backup (S3), anomaly detection, DeFi automation, free Tapsigner.
 
-**Conversion funnel:** 30-day VTXO expiry = natural conversion event. Users who don't have the mobile app must interact with the system monthly. The CLI earns the trust. The app captures the revenue.
+**Conversion funnel:** 7-day VTXO expiry (mainnet) = natural conversion event. Users who don't have the mobile app must interact with the system weekly. The CLI earns the trust. The app captures the revenue.
 
 ## Golem Service Directory
 
