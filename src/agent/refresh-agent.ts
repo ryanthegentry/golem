@@ -22,12 +22,9 @@ interface RefreshAgentConfig {
    *     function does NOT have this guard — it will compare block heights against Date.now()
    *     and produce nonsensical results.
    *
-   * TODO (Step 6): When building dynamic safety margins, we need to:
-   *   1. Detect whether batchExpiry is a timestamp or block height (check if < 1e12)
-   *   2. For block heights: convert to estimated wall-clock time using
-   *      currentBlockHeight + avgBlockInterval from the esplora API
-   *   3. Consider the SDK's own isExpired() heuristic (year < 2025 = block height)
-   *   See src/agent/expiry.ts for the conversion stub.
+   * Dynamic safety margins require detecting whether batchExpiry is a timestamp
+   * or block height (< 1e12), then converting block heights to wall-clock time
+   * via esplora API. See src/agent/expiry.ts for the conversion stub.
    */
   safetyMarginMs: number;
   /** Max VTXOs before triggering proactive consolidation. Default: 10 */
@@ -249,7 +246,7 @@ export class RefreshAgent {
         // Block-height expiry — compare directly (need current block height)
         // For now, we can't compare without current block height.
         // The emergency exit will rely on the SDK's expiry detection + consecutive failures.
-        // TODO: Fetch current block height from esplora for direct comparison.
+        // Block height comparison requires esplora API (deferred to post-PoC).
         continue;
       }
 

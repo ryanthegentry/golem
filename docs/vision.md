@@ -1,4 +1,4 @@
-# Golem — Vision (v7)
+# Golem — Vision
 
 *Updated March 1, 2026*
 
@@ -82,15 +82,12 @@ L402 gateway gains authorize-and-capture: consumer authorizes payment via covena
 
 ## Team
 
-**Ryan Gentry (CEO / Product):** Domain expertise in Bitcoin protocols, Lightning Network, and Ark architecture. Direct relationship with Tiero (Ark Labs CEO). Built 402index.io and Golem prototype. Previously at Lightning Labs. Relationships with all major Bitcoin VCs and wallet teams.
+Founding team. Open roles marked as such.
 
-**Ben Carman (CTO / Protocol):** Former CTO of Mutiny Wallet. Currently at Spiral (spiral.xyz). Building Pika, a Nostr-based encrypted messaging client for AI agents, with Justin. World-class covenants expertise. One of approximately 10-20 people globally who could properly implement the recursive covenant architecture.
-
-**Justin Moon (Engineering Lead / SDK & Infrastructure):** Former Head of Engineering at Fedi (Fedimint). Currently on HRF grants building an AI for Advocates group. Co-building Pika with Ben. Has the itch to build products again. Understands the UX gap between custodial convenience and self-custodial sovereignty — that was literally Fedi's thesis.
-
-**Skyler [TBD] (Design Lead):** Senior product designer, already working with Justin on various projects. Former Fedi design.
-
-**Pika integration:** Ben and Justin are already building a Nostr-based encrypted messaging client for AI agents (Pika). This is directly adjacent to Golem's thesis — agent infrastructure, Bitcoin-native, privacy-focused. The combined vision: agents that can communicate securely (Signal encryption via Pika) AND transact autonomously (covenant-secured receive via Golem), both without holding key material they shouldn't have. The exact integration architecture is an open design question to resolve together.
+- **CEO / Product:** Ryan Gentry — Bitcoin protocol expertise (Lightning Labs), Ark architecture, built 402index.io and Golem prototype
+- **CTO / Protocol:** Open — requires deep covenants expertise, Ark/Taproot internals
+- **Engineering Lead / SDK & Infrastructure:** Open — requires wallet SDK experience, self-custodial UX
+- **Design Lead:** Open — product design for Bitcoin fintech
 
 ## Ark Ecosystem Context
 
@@ -111,7 +108,7 @@ L402 gateway gains authorize-and-capture: consumer authorizes payment via covena
 
 1. Arkade introspection opcodes shipping imminently — enables the core covenant architecture
 2. Ark Labs well-funded (Tether backing) and actively shipping (stablecoins in weeks)
-3. Ben and Justin available and already building in adjacent space (Pika)
+3. Strong candidate co-founders available and already building in adjacent space
 4. Agent economy growing exponentially (x402 from 0 to 12K endpoints in <1 year)
 5. 402index.io live as distribution channel (13K+ endpoints)
 6. Working prototype with 336 tests and live transactions

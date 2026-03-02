@@ -1,4 +1,4 @@
-# Golem — Open Research Priorities (v7)
+# Golem — Open Research Priorities
 
 Questions and investigations identified during red team review and subsequent development. Ordered by criticality. Updated with Phase 2 covenant gating questions, co-founder meeting prep, and new P2 items (March 1, 2026).
 

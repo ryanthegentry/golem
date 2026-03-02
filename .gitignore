@@ -6,4 +6,8 @@ data-l402/
 *.log
 *.swp
 .DS_Store
-.desloppify/
+assets/brand/
+docs/DESIGN.md
+docs/mainnet-smoke-test.md
+scripts/
+tests/research/
