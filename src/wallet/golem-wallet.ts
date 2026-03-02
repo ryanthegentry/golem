@@ -197,10 +197,10 @@ export class GolemWallet {
    *
    * NOTE: Unilateral exit assumes pre-signed tx tree data is available in local storage.
    * If wallet data dir is lost, unilateral exit is impossible.
-   * TODO: Premium tier: S3 backup of data dir. Free tier: "back up data dir" warning.
+   * Future: S3 backup of data dir (premium tier) or "back up data dir" warning (free tier).
    *
-   * TODO: Reserve fee rate uses static 10 sat/vbyte estimate. Replace with dynamic
-   * fee estimation when mempool monitoring ships (research-priorities #11).
+   * Note: Reserve fee rate uses a static 10 sat/vbyte estimate. Dynamic fee estimation
+   * requires mempool monitoring (deferred to post-PoC).
    */
   async exitToSafeHarbor(
     safeHarborAddress: string,
@@ -266,9 +266,7 @@ export class GolemWallet {
   /**
    * Check that a send amount doesn't exceed OOR exposure limits.
    *
-   * TODO: This checks individual send size, not cumulative unsettled OOR exposure.
-   * The architecture doc specifies "maximum OOR balance" — meaning total unsettled
-   * OOR across multiple sends. E.g. three 5% sends should trigger the 10% limit.
+   * Note: This checks individual send size, not cumulative unsettled OOR exposure.
    * Per-send check is correct for PoC. A later phase should track cumulative OOR
    * balance by summing preconfirmed VTXOs that haven't settled into a round yet.
    */

@@ -51,7 +51,7 @@ If ASP goes down, users can claim on-chain using pre-signed transaction trees. R
 
 ## Delegation Primitive (Arkade Intents)
 
-**Status: Deferred for Golem.** Delegation is live in the Ark protocol but Golem is targeting covenant-based keyless receive (Phase 1.5) instead. Delegation becomes irrelevant for the provider use case once covenants ship. See `docs/architecture.md` for the covenant design.
+**Status: Deferred for Golem.** Delegation is live in the Ark protocol but Golem is targeting covenant-based keyless receive (Phase 1.5) instead. Delegation becomes irrelevant for the provider use case once covenants ship. See `docs/signer-security.md` for the covenant design.
 
 Delegation uses **Arkade Intents** — BIP322-style ownership proofs combined with partial forfeit transactions. This is NOT a "present a credential to the ASP" model. The delegate is an active round participant.
 
