@@ -1,6 +1,6 @@
 # Golem
 
-Self-custodial Bitcoin wallet on Ark with an L402 gateway for AI agents. Agents receive Lightning payments via Boltz reverse swaps that settle to Ark VTXOs — no LND or CLN node required. Think "Aperture without LND." Path to covenant-enabled keyless receive once Arkade ships introspection opcodes (OP_SUCCESS202/207/209/213).
+Self-custodial Bitcoin wallet on Ark with an L402 gateway for AI agents. Agents receive Lightning payments via Boltz reverse swaps that settle to Ark VTXOs — no LN node required. Think "Aperture without LND." Path to covenant-enabled keyless receive once Arkade ships introspection opcodes (OP_SUCCESS202/207/209/213).
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ npm run golem -- directory list
 npm run golem -- directory search "weather"
 ```
 
-No LND node required. The gateway creates Lightning invoices via Boltz reverse swaps and receives Ark-native OOR payments directly. See `.env.example` for all options.
+The gateway creates Lightning invoices via Boltz reverse swaps and receives Ark-native OOR payments directly. See `.env.example` for all options.
 
 Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <btc-address>`
 
