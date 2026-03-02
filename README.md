@@ -127,6 +127,7 @@ Client                    Gateway (port 8402)              Upstream API
 | [docs/STORYBOARD.md](docs/STORYBOARD.md) | User stories — provider onboarding to agent-to-agent commerce |
 | [docs/research-priorities.md](docs/research-priorities.md) | Open research questions, known unknowns, and resolved items |
 | [docs/signer-security.md](docs/signer-security.md) | Three-component model, signer interface, tiered security |
+| [docs/architecture-overview.md](docs/architecture-overview.md) | Layered architecture, L402 gateway flows, full test walkthrough |
 | [docs/ark-reference.md](docs/ark-reference.md) | Ark protocol specifics — VTXO lifecycle, rounds, fees, Boltz |
 | [docs/sdk-identity-analysis.md](docs/sdk-identity-analysis.md) | Ark SDK Identity interface analysis |
 
@@ -155,7 +156,7 @@ npm run test:watch    # Watch mode
 - [`@arkade-os/boltz-swap`](https://github.com/ArkadeLabs/boltz-swap) — Lightning swaps via Boltz
 - [`hono`](https://hono.dev) — HTTP framework for gateway and API
 - [`macaroon`](https://www.npmjs.com/package/macaroon) — Go macaroon library JS port (same as LND/Aperture)
-- [`@scure/btc-signer`](https://github.com/nicolo-ribaudo/btc-signer) — Transaction construction
+- [`@scure/btc-signer`](https://github.com/paulmillr/scure-btc-signer) — Transaction construction
 - [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) — Macaroon store for anti-replay
 - [`commander`](https://github.com/tj/commander.js) — CLI framework
 

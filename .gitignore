@@ -7,7 +7,6 @@ data-l402/
 *.swp
 .DS_Store
 assets/brand/
-docs/DESIGN.md
 docs/mainnet-smoke-test.md
 scripts/
 tests/research/
