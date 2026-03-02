@@ -45,17 +45,17 @@ Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <b
 **Three-component model (non-negotiable boundary):**
 
 ```
-┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
-│       SIGNER        │     │        AGENT         │     │        STATE        │
-│  (Mobile or HW key) │     │    (User-Owned)      │     │   (Arkade / ASP)    │
-│                     │     │                     │     │                     │
+┌─────────────────────-┐     ┌─────────────────────-┐     ┌─────────────────────┐
+│       SIGNER         │     │        AGENT         │     │        STATE        │
+│  (Mobile or HW key)  │     │    (User-Owned)      │     │   (Arkade / ASP)    │
+│                      │     │                      │     │                     │
 │ • Holds private keys │     │ • Monitors VTXOs     │     │ • VTXO ownership    │
 │ • Signs transactions │◄────│ • Proposes txs       │────►│ • Round history     │
 │ • Tiered by amount   │     │ • Consolidates VTXOs │     │ • Transaction trees │
-│                     │     │ • User deploys it    │     │                     │
-│ MOBILE: <0.21 BTC   │     │ • Claim daemon       │     │                     │
-│ HARDWARE: ≥0.21 BTC │     │   (covenant, no key) │     │                     │
-└─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+│                      │     │ • User deploys it    │     │                     │
+│ MOBILE: <0.21 BTC    │     │ • Claim daemon       │     │                     │
+│ HARDWARE: ≥0.21 BTC  │     │   (covenant, no key) │     │                     │
+└─────────────────────-┘     └─────────────────────-┘     └─────────────────────┘
 ```
 
 Phase 1 uses ServerSigner (hot key encrypted on disk) — same security model as every LN node. Phase 1.5 targets covenant-based keyless receive where the server never holds a signing key. See [docs/COVENANT.md](docs/COVENANT.md).
