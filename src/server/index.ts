@@ -15,6 +15,10 @@ import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
+import { createInternalApi } from '../l402/internal-api.js';
+import { FileRootKeyStore } from '../l402/macaroon.js';
+import { MacaroonStore } from '../l402/macaroon-store.js';
+import { createLightning } from '../lightning/index.js';
 
 // --- Startup ---
 
@@ -44,6 +48,41 @@ const agent = new RefreshAgent(wallet, undefined, (event) => {
 agent.start();
 console.log('RefreshAgent started');
 
+// --- API Key ---
+
+const apiKey = process.env.GOLEM_API_KEY;
+if (!apiKey) {
+  console.warn('WARNING: No GOLEM_API_KEY set. Fund-moving endpoints (/api/send, /api/onboard) are blocked.');
+  console.warn('         Set GOLEM_API_KEY env var to enable all API endpoints.');
+}
+
+// --- L402 Internal API ---
+
+const l402DataDir = process.env.GOLEM_L402_DATA_DIR || './data-l402';
+const rootKeyStore = new FileRootKeyStore(l402DataDir);
+const macaroonStore = new MacaroonStore(`${l402DataDir}/macaroons.db`);
+
+let lightning: Awaited<ReturnType<typeof createLightning>> | null = null;
+try {
+  lightning = await createLightning(wallet.sdkWallet, netConfig);
+  console.log('Lightning (SwapManager) started for L402');
+} catch (err) {
+  console.warn('Lightning init failed — L402 challenge/verify will be unavailable:', err instanceof Error ? err.message : err);
+}
+
+const l402Api = lightning
+  ? createInternalApi({
+      lightning,
+      wallet,
+      rootKeyStore,
+      macaroonStore,
+      networkConfig: netConfig,
+      startTime: Date.now(),
+      refreshAgentRunning: () => agent.isRunning,
+      apiKey,
+    })
+  : null;
+
 // --- App ---
 
 const app = new Hono();
@@ -52,12 +91,6 @@ const app = new Hono();
 app.use('*', secureHeaders());
 
 // Auth middleware — require GOLEM_API_KEY for all /api routes
-const apiKey = process.env.GOLEM_API_KEY;
-if (!apiKey) {
-  console.warn('WARNING: No GOLEM_API_KEY set. Fund-moving endpoints (/api/send, /api/onboard) are blocked.');
-  console.warn('         Set GOLEM_API_KEY env var to enable all API endpoints.');
-}
-
 app.use('/api/*', async (c, next) => {
   // Fund-moving endpoints require GOLEM_API_KEY — fail-closed when unset
   const path = new URL(c.req.url).pathname;
@@ -190,12 +223,20 @@ app.get('/api/info', async (c) => {
   }
 });
 
+// L402 internal API routes — mounted alongside wallet dashboard
+if (l402Api) {
+  app.route('/', l402Api);
+  console.log('L402 internal API mounted at /l402/*');
+} else {
+  app.all('/l402/*', (c) => c.json({ error: 'L402 service unavailable — Lightning init failed' }, 503));
+}
+
 // Static files (PWA) — serve from src/server/public relative to cwd
 app.use('/*', serveStatic({ root: './src/server/public' }));
 
 // --- Start ---
 
-const hostname = process.env.GOLEM_HOST || '127.0.0.1';
+const hostname = process.env.GOLEM_HOST || '0.0.0.0';
 serve({ fetch: app.fetch, port, hostname }, () => {
   console.log(`Golem server running on http://${hostname}:${port}`);
 });
