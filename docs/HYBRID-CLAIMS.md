@@ -384,6 +384,57 @@ Ryan mentioned `BoltzExchange/regtest` with `--profile ark`. Couldn't confirm th
 
 ---
 
+## Regtest Validation Results
+
+### Phase 1: Hashlock Baseline (Commit 8d79bc2)
+
+Standard VHTLC create→fund→claim on regtest using the SDK's `VHTLC.Script` class. Collaborative path: `preimage + receiver_sig + server_sig`.
+
+- Test: `test/regtest/hashlock-baseline.ts`
+- arkd v0.8.11 (nigiri --ark --ci)
+- Key learning: `ConditionWitness` (preimage) must be set on BOTH the ark tx AND checkpoint PSBTs before signing. Without it on checkpoints, `finalizeTx` fails with `INVALID_SIGNATURE`.
+
+### Phase 2: Covenant Claim via Introspector (Commit TBD)
+
+Keyless claim using Introspector as covenant enforcer. The receiver's private key is NOT used for the claim — only the preimage + Introspector signature + server signature.
+
+- Test: `test/regtest/covenant-claim.ts`
+- arkd v0.9.0-rc.4 + Introspector (docker-compose.regtest.yml)
+- Custom VtxoScript with 6 tapscript leaves:
+  - Leaf 0: **Covenant claim** — plain `MultisigTapscript` with `[introspector_tweaked_key, server_key]`
+  - Leaf 1: Standard hashlock claim (fallback) — `ConditionMultisigTapscript` with `[receiver_key, server_key]`
+  - Leaf 2: Refund — `MultisigTapscript` with `[sender, receiver, server]`
+  - Leaves 3-5: Unilateral claim/refund paths with CSV timelocks
+
+**Key technical discoveries:**
+
+1. **Introspector only parses `MultisigClosure` tapscripts.** Using `ConditionMultisigTapscript` (which prepends condition script) makes the leaf invisible to the Introspector. The covenant claim leaf must be a PLAIN `MultisigTapscript`. The HASH160 preimage check goes into the Arkade Script bytecode (in the OP_RETURN Introspector Packet), not the tapscript.
+
+2. **OP_RETURN must be in `buildOffchainTx` outputs.** Adding OP_RETURN after `buildOffchainTx` changes the txid, making checkpoints reference the wrong tx. The Introspector Packet must be included in the `outputs` array passed to `buildOffchainTx`.
+
+3. **Checkpoints need Introspector co-signing after arkd's `submitTx`.** arkd creates its own checkpoint PSBTs during `submitTx`, so the Introspector's signature from the initial signing is lost. Flow: build → Introspector signs → arkd signs (creates new checkpoints) → Introspector signs checkpoints again → finalize.
+
+4. **arkd v0.8.11 does NOT support OP_RETURN outputs.** Returns `AMOUNT_TOO_LOW` for 0-value outputs. arkd v0.9.0-rc.4 is required for Introspector Packet support.
+
+5. **Arkade Script bytecode** (73 bytes, hand-constructed):
+   ```
+   OP_HASH160 <20-byte preimage_hash> OP_EQUALVERIFY     // Verify preimage
+   OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY // Check taproot v1
+   <32-byte witness_program> OP_EQUALVERIFY               // Check recipient address
+   OP_0 OP_INSPECTOUTPUTVALUE <8-byte amount_LE> OP_GTE64 // Check min amount
+   ```
+
+6. **Introspector Packet encoding** (in OP_RETURN):
+   ```
+   OP_RETURN + push_opcode + "ARK" + TLV(type=0x01, uvarint_len, payload)
+   Payload: varint(entry_count) + [u16_LE(vin) + varint(script_len) + script + varint(witness_len) + witness]
+   Witness: standard Bitcoin witness format (varint(count) + [varint(len) + bytes])
+   ```
+
+7. **Key tweaking**: `tweaked_key = introspector_base_key + TaggedHash("ArkScriptHash", arkade_script) * G`
+
+**Result:** Full end-to-end covenant claim on regtest. 10,000 sats claimed from VHTLC to recipient VTXO with zero key material.
+
 ## Reference
 
 - **golem-liquid:** Working reference implementation. Cooperative claim validated on Liquid mainnet, tx `f686839d7bc049e5e146a75536d7ad240c2428fbe90b89472d846fff37926d38`.
