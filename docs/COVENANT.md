@@ -90,8 +90,35 @@ The complete architecture for an agent-managed VTXO. Three leaves aligned with a
 - `MultisigTapscript([introspector_tweaked_key, server_pubkey])`
 - Introspector evaluates Arkade Script bytecode: `OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY` (4 bytes: `00d15188`)
 - Checks output[0] is taproot (version == 1). Agent enforces output destination = same address.
-- The agent uses this leaf for all autonomous operations. No private key needed.
+- The agent uses this leaf for all autonomous operations: 1:1 refresh and N:1 consolidation. No private key needed.
 - Classified as "forfeit" by arkd (MultisigClosure) — contains server pubkey.
+
+**Leaf 0 Threat Model — Refresh Output Destination:**
+
+The refresh Arkade Script checks output taproot version only, not output destination. Hardcoding the witness program into the script is impossible due to circular dependency: the VTXO address is derived from the taptree which contains the Arkade Script which would contain the address. The output destination is enforced by the agent constructing the transaction to the same address.
+
+*Attack conditions for refresh output redirection:*
+- An attacker must compromise the agent process (not just extract a key — there is no key to extract).
+- The attacker must construct a valid offchain tx with a different taproot output address.
+- Both the Introspector AND arkd must co-sign. Neither checks output destination:
+  - The Introspector evaluates the Arkade Script (`00d15188`), which passes for ANY taproot output.
+  - arkd validates forfeit closure structure (server pubkey present in MultisigClosure leaves) but does not inspect output addresses.
+- The redirect can only occur during a refresh or consolidation operation — these happen when VTXOs approach expiry (default: 3-day safety margin before 7-day VTXO expiry on mainnet) or when VTXOs exceed the consolidation threshold (default: >10 VTXOs or dust cleanup). The RefreshAgent polls every 60 seconds.
+- Between refresh windows, there is no transaction for the attacker to redirect. The attacker must sustain agent process access and wait for (or trigger) a refresh cycle.
+- The VTXO owner can race the attacker by spending via Leaf 1 (collaborative, alice + server) from their mobile app at any time. The owner's spend and the attacker's refresh are competing for the same VTXO input — only one can succeed.
+
+*Why the full recursive covenant doesn't work:*
+
+The root cause is that `OP_INSPECTINPUTSCRIPTPUBKEY` returns the checkpoint's witness program, not the original VTXO's. Ark's `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction (serverUnroll + collaborative). When the Introspector evaluates the Arkade Script, `OP_INSPECTINPUTSCRIPTPUBKEY` sees the checkpoint WP (2-leaf), not the VTXO WP (3-leaf), so `input == output` always fails.
+
+*Two possible fixes (both require Ark Labs changes, not Golem changes):*
+
+1. **Introspector "trace-through" mode:** The Introspector could resolve `OP_INSPECTINPUTSCRIPTPUBKEY` by tracing through the checkpoint wrapper to return the original VTXO's scriptPubKey. This would require the Introspector to understand Ark's checkpoint structure and unwrap one level of indirection. The Arkade Script would then be the original 7-byte recursive covenant (`00d100ca7b8887`: input[0].scriptPubKey == output[0].scriptPubKey).
+2. **arkd custom checkpoint taptrees:** If arkd accepted custom checkpoint scripts (instead of always generating 2-leaf serverUnroll + collaborative), the checkpoint could preserve the original VTXO's script structure, making `OP_INSPECTINPUTSCRIPTPUBKEY` return the expected value.
+
+Either fix would eliminate the agent-integrity assumption for refresh destination enforcement, achieving the full "server breach → attacker gets nothing" guarantee.
+
+*Bottom line:* This is still dramatically better than Phase 1 (hot key on server = entire wallet extractable). In Tier 1.5, there is no key to extract. An attacker with sustained agent process access can redirect refresh outputs but must race the VTXO owner and can only act during refresh windows. The attack requires compromising the agent process, not just reading memory or disk.
 
 **Leaf 1 — Collaborative Path (user + server):**
 - `<alice_pubkey> OP_CHECKSIGVERIFY <operator_pubkey> OP_CHECKSIG`
