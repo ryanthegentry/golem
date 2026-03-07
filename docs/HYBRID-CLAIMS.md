@@ -152,9 +152,9 @@ On-chain claims use the golem-liquid pattern: ephemeral keypair → MuSig2 nonce
 
 Once funds land in a covenant-enabled VTXO:
 
-- **Refresh:** Agent submits Leaf 1 spend to next Ark round. Output must carry same taptree script. No signature.
-- **Consolidation:** Multiple covenant VTXOs with same script → single output. Leaf 1 allows N:1 because it checks script equality, not specific UTXO identity.
-- **Spend/Withdraw:** User opens mobile app, signs via Leaf 2 (master key). This is the recursion breaker.
+- **Refresh:** Agent submits Leaf 0 spend to next Ark round. Output must carry same taptree script. No signature.
+- **Consolidation:** Multiple covenant VTXOs with same script → single output. Leaf 0 allows N:1 because it checks taproot version, agent enforces same-address output.
+- **Spend/Withdraw:** User opens mobile app, signs via Leaf 1 (collaborative, alice + server). This is the recursion breaker.
 
 ## Security Tiers (Updated)
 
@@ -163,7 +163,9 @@ Once funds land in a covenant-enabled VTXO:
 | 0 | ServerSigner | Master key signs claim | Master key signs refresh | Hot master key | Entire wallet |
 | 0.5 | Cooperative | Ephemeral MuSig2 with Boltz | Master key signs refresh | Hot master key (for refresh only) | One in-flight swap |
 | 1 | Mobile | Ephemeral MuSig2 with Boltz | User signs refresh from app | None (sweep to mobile) | One in-flight swap |
-| 1.5 | Hybrid | Ephemeral MuSig2 (primary) + covenant fallback | Covenant refresh (Leaf 1) | **None** | One in-flight swap (cooperative) or zero (covenant fallback) |
+| 1.5 | Hybrid | Covenant claim (primary) + ephemeral hashlock (fallback) | Covenant refresh (Leaf 0) | **None** | Zero (claim) / agent-integrity-dependent (refresh)¹ |
+
+¹ **Refresh blast radius detail:** The refresh Arkade Script (`00d15188`) checks output taproot version only, not destination address. An attacker with sustained agent process access could redirect refresh outputs during refresh windows, but must race the VTXO owner's Leaf 1 spend. No key to extract. See [COVENANT.md — Leaf 0 Threat Model](./COVENANT.md) for full attack conditions and Introspector fixes that would eliminate this.
 
 **Tier 0.5 is what golem-liquid validated today.** The master key is still on the server for VTXO lifecycle operations (refresh, consolidation), but swap claims use ephemeral keys.
 
@@ -175,7 +177,7 @@ Once funds land in a covenant-enabled VTXO:
 |---------|--------|-------------------|---------------------|
 | Key on server | Hot master key | Hot master key (refresh) + ephemeral (claims) | **None** |
 | Swap compromise | Entire wallet | One in-flight swap | One in-flight swap (coop) or nothing (covenant) |
-| Server breach | Attacker gets wallet | Attacker gets wallet (still has master key for refresh) | **Attacker gets nothing** |
+| Server breach | Attacker gets wallet | Attacker gets wallet (still has master key for refresh) | **No key to extract** — attacker with sustained process access can redirect refresh outputs during refresh windows (see [COVENANT.md Leaf 0 Threat Model](./COVENANT.md)) |
 | Delegation needed | No | No | No |
 | Monthly provisioning | No | No | No |
 
