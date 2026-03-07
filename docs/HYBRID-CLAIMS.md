@@ -40,20 +40,18 @@ Layer 1: Swap Claims (Lightning → VTXO)
                          ▼
 Layer 2: VTXO Lifecycle (refresh, consolidation, spend)
 ┌─────────────────────────────────────────────────────────┐
-│  REFRESH + CONSOLIDATION: Covenant (Leaf 1)              │
-│  • Recursive covenant via Introspector + Arkade Script   │
+│  REFRESH + CONSOLIDATION: Covenant (Leaf 0)              │
+│  • Covenant via Introspector + Arkade Script              │
 │  • No key needed — agent submits to ASP autonomously     │
 │  • Handles both 1:1 refresh and N:1 consolidation        │
 │                                                          │
-│  SPEND + WITHDRAW: Master key (Leaf 2)                   │
-│  • secp256k1 key on mobile phone / hardware wallet       │
-│  • Only way to move funds to a different address          │
-│  • Never touches the server                              │
+│  SPEND + WITHDRAW + FORFEIT: Collaborative (Leaf 1)      │
+│  • alice + server multisig for spending, OOR, rounds     │
+│  • Alice signs on mobile, server co-signs                │
+│  • Also used by arkd for forfeit transactions            │
+│  • Private key never touches the server                  │
 │                                                          │
-│  COLLABORATIVE: Ark protocol (Leaf 3)                    │
-│  • alice + operator multisig for OOR, round participation │
-│                                                          │
-│  EMERGENCY EXIT: Timelock (Leaf 4)                       │
+│  EMERGENCY EXIT: Timelock (Leaf 2)                       │
 │  • alice + CSV for unilateral exit if operator disappears │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -232,29 +230,24 @@ Gated on: Introspector deployed alongside `arkade.computer` (mainnet ASP).
 
 ## VTXO Address Construction
 
-For Tier 1.5, the cooperative claim transaction's output must pay to a taproot address with this taptree:
+For Tier 1.5, the covenant claim output pays to a taproot address with this taptree:
 
 ```
-Internal key: alice_pubkey (for key-path spend — Leaf 2 shortcut)
+Internal key: TAPROOT_UNSPENDABLE_KEY (NUMS point — no key-path spend)
 
-Script tree:
-├── Leaf 1: Recursive covenant (refresh/consolidation)
-│   OP_INSPECTINPUTSCRIPTPUBKEY
-│   OP_INSPECTOUTPUTSCRIPTPUBKEY
-│   OP_EQUAL OP_VERIFY
-│   OP_INSPECTNUMOUTPUTS <1> OP_EQUALVERIFY
+Script tree (3 leaves):
+├── Leaf 0: Covenant refresh (agent-operated, no signature)
+│   MultisigTapscript [introspector_tweaked_key, server_key]
+│   Arkade Script: OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY
 │
-├── Leaf 2: Alice's spending key
-│   <alice_pubkey> OP_CHECKSIG
-│
-├── Leaf 3: Collaborative (Ark protocol)
+├── Leaf 1: Collaborative (spend, OOR, rounds, forfeit)
 │   <alice_pubkey> OP_CHECKSIGVERIFY <operator_pubkey> OP_CHECKSIG
 │
-└── Leaf 4: Unilateral exit
-    <alice_pubkey> OP_CHECKSIG <timelock> OP_CSV
+└── Leaf 2: Unilateral exit (emergency)
+    <timelock> OP_CSV OP_DROP <alice_pubkey> OP_CHECKSIG
 ```
 
-The gateway needs alice_pubkey and operator_pubkey at init time to construct this address. Both are already available: alice_pubkey from wallet setup, operator_pubkey from the ASP connection.
+The CLI never generates a seed. `alice_pubkey` is imported from the mobile wallet during `golem init --import --pubkey <hex>` (32-byte x-only secp256k1). The private key is generated on the mobile device and NEVER touches the server. `operator_pubkey` comes from the ASP connection (`/v1/info`). `introspector_tweaked_key` is derived as `introspector_base_key + TaggedHash("ArkScriptHash", refresh_arkade_script) * G`. All values available at init time.
 
 ## Esplora Timing Issue (RESOLVED)
 
@@ -435,40 +428,52 @@ Keyless claim using Introspector as covenant enforcer. The receiver's private ke
 
 **Result:** Full end-to-end covenant claim on regtest. 10,000 sats claimed from VHTLC to recipient VTXO with zero key material.
 
-### Phase 3: Four-Leaf Covenant VTXO Output (Commit TBD)
+### Phase 3: Three-Leaf Covenant VTXO Output (Commit TBD)
 
-The claim output is now a four-leaf covenant VTXO matching the architecture in COVENANT.md. This VTXO supports autonomous agent operations (refresh, consolidation) via the recursive covenant leaf, while preserving user custody via the Alice spending key.
+The claim output is now a three-leaf covenant VTXO. This VTXO supports autonomous agent operations (refresh, consolidation) via the covenant refresh leaf, while preserving user custody via the collaborative path.
 
-**Four-leaf taptree structure:**
+**Three-leaf taptree structure:**
 
-| Leaf | Purpose | Script | Key Required |
-|------|---------|--------|--------------|
-| 1 | Recursive covenant (refresh/consolidation) | `MultisigTapscript [refresh_tweaked_key, server_key]` | None (Introspector) |
-| 2 | Alice's spending key (withdraw, spend) | `MultisigTapscript [alice_key]` | Alice's master key |
-| 3 | Collaborative (Ark protocol operations) | `MultisigTapscript [alice_key, server_key]` | Alice + operator |
-| 4 | Unilateral exit (emergency) | `CSVMultisigTapscript [alice_key]` with timelock | Alice (after CSV) |
+| Leaf | Purpose | Script | Key Required | arkd Classification |
+|------|---------|--------|--------------|---------------------|
+| 0 | Covenant refresh (agent-operated) | `MultisigTapscript [refresh_tweaked_key, server_key]` | None (Introspector) | Forfeit |
+| 1 | Collaborative (spend, OOR, rounds, forfeit) | `MultisigTapscript [alice_key, server_key]` | Alice + server | Forfeit |
+| 2 | Unilateral exit (emergency) | `CSVMultisigTapscript [alice_key]` with timelock | Alice (after CSV) | Exit |
 
-**Refresh Arkade Script** (7 bytes — checks input script == output script):
+**Why three leaves, not four?** arkd's `Validate()` classifies all `MultisigClosure` leaves as "forfeit closures" and requires the server pubkey in every one. An alice-only `MultisigClosure` (for independent spending) fails with `"invalid forfeit closure, signer pubkey not found"`. Alice spends via the collaborative leaf (standard Ark model — server co-signs).
+
+**Refresh Arkade Script** (4 bytes — checks output is taproot):
 ```
-OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY   // Push output[0]'s [wp, ver]
-OP_0 OP_INSPECTINPUTSCRIPTPUBKEY    // Push input[0]'s [wp, ver]
-OP_ROT                               // Rearrange for comparison
-OP_EQUALVERIFY                       // Versions must match
-OP_EQUAL                             // Witness programs must match
+OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY   // Push output[0]'s [wp, version]
+OP_1 OP_EQUALVERIFY                  // Version must be 1 (taproot)
+                                     // Stack: [wp] — truthy (non-zero)
 ```
-Bytecode: `00 d1 00 ca 7b 88 87`
+Bytecode: `00 d1 51 88`
+
+**Why not recursive (input == output)?** Ark's `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction. The arkTx's `OP_INSPECTINPUTSCRIPTPUBKEY` returns the checkpoint's witness program (2-leaf), not the original VTXO's (3-leaf). Agent enforces same-address output instead.
 
 The refresh leaf uses a DIFFERENT Introspector tweaked key than the claim leaf, because each key is derived from its own Arkade Script: `tweaked_key = base_key + TaggedHash("ArkScriptHash", script) * G`.
 
-**Result:** Full Tier 1.5 architecture validated on regtest. Agent can:
+### Phase 4: Refresh Cycle via Covenant Leaf (Validated)
+
+Full covenant refresh validated on regtest. The agent spends the claimed 3-leaf VTXO via Leaf 0 (covenant refresh) and creates a new VTXO with the SAME taptree — zero key material used.
+
+**Flow:**
+1. Build offchain tx: input = claimed VTXO, output = same pkScript
+2. Include OP_RETURN with refresh Arkade Script (`00d15188`)
+3. Introspector validates output is taproot → signs with refresh tweaked key
+4. arkd validates forfeit closures (Leaf 0 + Leaf 1 both have server pubkey) → co-signs
+5. Introspector co-signs arkd's checkpoints → finalize
+
+**Result:** Full Tier 1.5 architecture validated end-to-end on regtest. Agent can:
 - Claim incoming VHTLCs with zero key material (covenant claim leaf)
-- Refresh/consolidate VTXOs with zero key material (recursive covenant leaf)
-- User retains full custody via Alice's master key (leaf 2)
+- Refresh VTXOs with zero key material (covenant refresh leaf)
+- User retains full custody via collaborative path (alice signs on mobile)
 
 ## Reference
 
 - **golem-liquid:** Working reference implementation. Cooperative claim validated on Liquid mainnet, tx `f686839d7bc049e5e146a75536d7ad240c2428fbe90b89472d846fff37926d38`.
-- **COVENANT.md:** Four-leaf taptree spec with introspection opcodes.
+- **COVENANT.md:** Three-leaf taptree spec with introspection opcodes (validated on regtest).
 - **signer-security.md:** Three-component security model and signer hierarchy.
 - **research/keyless-agent-feasibility.md:** Analysis of delegation vs. covenant approaches (agent-state repo).
 - **Boltz API:** `/v2/swap/reverse` (create), `/v2/swap/reverse/{id}/claim` (cooperative MuSig2 nonce exchange).
