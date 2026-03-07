@@ -1,14 +1,19 @@
 /**
- * Phase 2: Covenant claim via Introspector on regtest.
+ * Phase 2+3: Covenant claim via Introspector on regtest with 4-leaf VTXO output.
  *
- * Creates a custom VHTLC with an additional covenant claim leaf that uses
- * the Introspector's tweaked key instead of a receiver key. Claims using
- * only the preimage + Introspector signature + server signature.
- * No receiver private key is needed for the claim.
+ * Creates a custom VHTLC with a covenant claim leaf that uses the Introspector's
+ * tweaked key instead of a receiver key. Claims using only the preimage +
+ * Introspector signature + server signature. No receiver private key needed.
+ *
+ * The claim output is a four-leaf covenant VTXO:
+ *   Leaf 1: Recursive covenant (refresh/consolidation via Introspector)
+ *   Leaf 2: Alice's spending key (master key on mobile/hardware)
+ *   Leaf 3: Collaborative (alice + operator for Ark protocol)
+ *   Leaf 4: Unilateral exit (alice + CSV timelock)
  *
  * Prerequisites:
- *   nigiri start --ark --ci
- *   docker compose -f /tmp/introspector/docker-compose.introspector-only.yml up -d
+ *   nigiri start --ci   (no --ark — we use the Introspector compose stack)
+ *   docker compose -f /tmp/introspector/docker-compose.regtest.yml up -d
  *
  * Run:
  *   npx tsx test/regtest/covenant-claim.ts
@@ -161,6 +166,27 @@ function buildArkadeScript(
     ...amountLE,                       // 8-byte LE amount
     0xdf,                              // OP_GREATERTHANOREQUAL64 → [1 or 0]
     // Stack: [1] if valid, [0] if not — script succeeds on truthy top
+  ]);
+}
+
+/**
+ * Build Arkade Script bytecode for recursive covenant refresh:
+ * Verifies output[0] scriptPubKey == input[0] scriptPubKey (same taptree).
+ * This allows the VTXO to be refreshed (extend expiry) without any key.
+ */
+function buildRefreshArkadeScript(): Uint8Array {
+  return new Uint8Array([
+    // Push output[0] scriptPubKey → [wp_out, ver_out]
+    0x00,       // OP_0 (output index 0)
+    0xd1,       // OP_INSPECTOUTPUTSCRIPTPUBKEY
+    // Push input[0] scriptPubKey → [wp_out, ver_out, wp_in, ver_in]
+    0x00,       // OP_0 (input index 0)
+    0xca,       // OP_INSPECTINPUTSCRIPTPUBKEY
+    // Compare versions: ROT puts ver_out on top next to ver_in
+    0x7b,       // OP_ROT → [wp_out, wp_in, ver_in, ver_out]
+    0x88,       // OP_EQUALVERIFY (ver_in == ver_out) → [wp_out, wp_in]
+    // Compare witness programs
+    0x87,       // OP_EQUAL → [1 if match, 0 if not]
   ]);
 }
 
@@ -321,13 +347,45 @@ async function main() {
   log(`Preimage: ${hex.encode(preimage)}`);
   log(`Preimage hash (HASH160): ${hex.encode(preimageHash)}`);
 
-  // 4. Build recipient VTXO script (where claimed funds will go)
-  const recipientVtxo = new DefaultVtxo.Script({
-    pubKey: receiverPubkey,
-    serverPubKey: serverPubkey,
-  });
-  const recipientWitnessProgram = recipientVtxo.tweakedPublicKey; // 32 bytes
-  log(`Recipient witness program: ${hex.encode(recipientWitnessProgram)}`);
+  // 4. Build four-leaf recipient VTXO (covenant-enabled)
+  // Leaf 1: Recursive covenant (refresh/consolidation) — Introspector-enforced
+  const refreshArkadeScript = buildRefreshArkadeScript();
+  log(`Refresh Arkade Script (${refreshArkadeScript.length} bytes): ${hex.encode(refreshArkadeScript)}`);
+  const refreshScriptHash = arkadeScriptHash(refreshArkadeScript);
+  const refreshTweakedKey = computeTweakedKey(introspectorBasePubkey, refreshScriptHash);
+  log(`Refresh tweaked key: ${hex.encode(refreshTweakedKey)}`);
+
+  const refreshLeafScript = MultisigTapscript.encode({
+    pubkeys: [refreshTweakedKey, serverPubkey],
+  }).script;
+
+  // Leaf 2: Alice's spending key (master key on mobile/hardware)
+  const aliceSpendScript = MultisigTapscript.encode({
+    pubkeys: [receiverPubkey],
+  }).script;
+
+  // Leaf 3: Collaborative (alice + operator for Ark protocol operations)
+  const collaborativeScript = MultisigTapscript.encode({
+    pubkeys: [receiverPubkey, serverPubkey],
+  }).script;
+
+  // Leaf 4: Unilateral exit (alice + CSV timelock for emergency)
+  const unilateralExitScript = CSVMultisigTapscript.encode({
+    timelock: { type: 'seconds', value: BigInt(info.unilateralExitDelay) },
+    pubkeys: [receiverPubkey],
+  }).script;
+
+  // Build the 4-leaf recipient VtxoScript
+  const recipientVtxo = new VtxoScript([
+    refreshLeafScript,       // Leaf 1: Recursive covenant
+    aliceSpendScript,        // Leaf 2: Alice's key
+    collaborativeScript,     // Leaf 3: Collaborative (alice + operator)
+    unilateralExitScript,    // Leaf 4: Unilateral exit
+  ]);
+  // Extract 32-byte witness program from pkScript (skip 0x5120 prefix)
+  const recipientWitnessProgram = recipientVtxo.pkScript.slice(2);
+  log(`Recipient 4-leaf VTXO witness program: ${hex.encode(recipientWitnessProgram)}`);
+  log(`Recipient 4-leaf VTXO address: ${recipientVtxo.address(networks.regtest.hrp, serverPubkey).encode()}`);
 
   // 5. Build Arkade Script (includes preimage hash check + output introspection)
   const arkadeScript = buildArkadeScript(preimageHash, recipientWitnessProgram, BigInt(FUND_AMOUNT));
@@ -560,10 +618,14 @@ async function main() {
   log(`Remaining VHTLC VTXOs: ${spentResult.vtxos.length} (should be 0)`);
 
   log('');
-  log('=== PHASE 2 COMPLETE ===');
+  log('=== PHASE 3 COMPLETE ===');
   log('  Covenant claim via Introspector — NO receiver key used!');
   log(`  Claimed VTXO: ${claimedVtxo.txid}:${claimedVtxo.vout} (${claimedVtxo.value} sats)`);
-  log('  Introspector validated output address + value, then co-signed');
+  log('  Output is a 4-leaf covenant VTXO:');
+  log('    Leaf 1: Recursive covenant (refresh) — Introspector-enforced');
+  log('    Leaf 2: Alice spending key');
+  log('    Leaf 3: Collaborative (alice + operator)');
+  log('    Leaf 4: Unilateral exit (alice + CSV)');
 }
 
 main().catch((err) => {

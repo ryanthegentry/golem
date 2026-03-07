@@ -435,6 +435,36 @@ Keyless claim using Introspector as covenant enforcer. The receiver's private ke
 
 **Result:** Full end-to-end covenant claim on regtest. 10,000 sats claimed from VHTLC to recipient VTXO with zero key material.
 
+### Phase 3: Four-Leaf Covenant VTXO Output (Commit TBD)
+
+The claim output is now a four-leaf covenant VTXO matching the architecture in COVENANT.md. This VTXO supports autonomous agent operations (refresh, consolidation) via the recursive covenant leaf, while preserving user custody via the Alice spending key.
+
+**Four-leaf taptree structure:**
+
+| Leaf | Purpose | Script | Key Required |
+|------|---------|--------|--------------|
+| 1 | Recursive covenant (refresh/consolidation) | `MultisigTapscript [refresh_tweaked_key, server_key]` | None (Introspector) |
+| 2 | Alice's spending key (withdraw, spend) | `MultisigTapscript [alice_key]` | Alice's master key |
+| 3 | Collaborative (Ark protocol operations) | `MultisigTapscript [alice_key, server_key]` | Alice + operator |
+| 4 | Unilateral exit (emergency) | `CSVMultisigTapscript [alice_key]` with timelock | Alice (after CSV) |
+
+**Refresh Arkade Script** (7 bytes — checks input script == output script):
+```
+OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY   // Push output[0]'s [wp, ver]
+OP_0 OP_INSPECTINPUTSCRIPTPUBKEY    // Push input[0]'s [wp, ver]
+OP_ROT                               // Rearrange for comparison
+OP_EQUALVERIFY                       // Versions must match
+OP_EQUAL                             // Witness programs must match
+```
+Bytecode: `00 d1 00 ca 7b 88 87`
+
+The refresh leaf uses a DIFFERENT Introspector tweaked key than the claim leaf, because each key is derived from its own Arkade Script: `tweaked_key = base_key + TaggedHash("ArkScriptHash", script) * G`.
+
+**Result:** Full Tier 1.5 architecture validated on regtest. Agent can:
+- Claim incoming VHTLCs with zero key material (covenant claim leaf)
+- Refresh/consolidate VTXOs with zero key material (recursive covenant leaf)
+- User retains full custody via Alice's master key (leaf 2)
+
 ## Reference
 
 - **golem-liquid:** Working reference implementation. Cooperative claim validated on Liquid mainnet, tx `f686839d7bc049e5e146a75536d7ad240c2428fbe90b89472d846fff37926d38`.
