@@ -14,6 +14,8 @@ AI agents running as cloud services need to receive Bitcoin payments (via Lightn
 
 None of these achieve: **server receives Lightning payments with zero key material, user retains full custody, agent operates autonomously.**
 
+4. **Golem (covenants):** User generates keypair on mobile, imports pubkey to CLI via `golem init --import --pubkey <hex>`. Server receives payments with zero key material. Covenants enforce output constraints — no signature needed for receive or refresh. Private key never touches the server. User retains full custody via mobile app.
+
 ## The Insight
 
 Arkade (the production Ark implementation by Ark Labs) supports introspection opcodes in its Script VM. These opcodes let a script examine the *transaction that's spending it* — specifically, what the outputs look like. This enables covenants: scripts that constrain where funds can go without requiring a signature.
@@ -59,9 +61,9 @@ These are the same opcodes Arkade uses internally for `unroll.hack` shared outpu
 
 **Tiero (March 1, 2026):** "before this quarter ends" for introspection opcodes. Also confirmed: "There are two things here automatic renewal and HTLC claim that can be delegated to third party without handing over a key."
 
-## Full Four-Leaf Taptree VTXO
+## Three-Leaf Taptree VTXO (Validated on Regtest)
 
-Beyond just the claim script, the complete architecture for an agent-managed VTXO:
+The complete architecture for an agent-managed VTXO. Three leaves aligned with arkd's forfeit/exit classification model:
 
 ```
                     ┌─────────────────┐
@@ -69,62 +71,68 @@ Beyond just the claim script, the complete architecture for an agent-managed VTX
                     │   (VTXO key)     │
                     └────────┬────────┘
                              │
-              ┌──────────────┼──────────────┐
-              │              │              │
-        ┌─────┴─────┐ ┌─────┴─────┐ ┌─────┴─────┐
-        │  Branch 1  │ │  Branch 2  │ │  Branch 3  │
-        └─────┬─────┘ └─────┬─────┘ └─────┬─────┘
-              │              │              │
-     ┌────┴────┐      ┌────┴────┐    ┌────┴────┐
-     │ Leaf 1  │      │ Leaf 2  │    │ Leaf 3  │    │ Leaf 4  │
-     │Covenant │      │Alice Key│    │Collab.  │    │Unilat.  │
-     │(refresh)│      │(spend)  │    │(A+Op)   │    │(exit)   │
-     └─────────┘      └─────────┘    └─────────┘    └─────────┘
+                    ┌────────┼────────┐
+                    │                 │
+              ┌─────┴─────┐    ┌─────┴─────┐
+              │  Branch    │    │  Leaf 2   │
+              └─────┬─────┘    │  Unilat.  │
+                    │          │  (exit)   │
+              ┌─────┴─────┐   └───────────┘
+              │           │
+         ┌────┴────┐ ┌───┴────┐
+         │ Leaf 0  │ │ Leaf 1 │
+         │Covenant │ │Collab. │
+         │(refresh)│ │(A+Op)  │
+         └─────────┘ └────────┘
 ```
 
-**Leaf 1 — Recursive Covenant (agent-operated, no signature):**
-- `OP_INSPECTINPUTSCRIPTPUBKEY` + `OP_INSPECTOUTPUTSCRIPTPUBKEY` enforce "output must carry same script as input"
-- Covers VTXO refresh (self-send to extend expiry) AND consolidation (multiple inputs with same script → single output)
-- `OP_INSPECTNUMOUTPUTS` enforces single output (prevents value siphoning)
-- The agent uses this leaf for all autonomous operations. No key needed.
+**Leaf 0 — Covenant Refresh (agent-operated, no signature):**
+- `MultisigTapscript([introspector_tweaked_key, server_pubkey])`
+- Introspector evaluates Arkade Script bytecode: `OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY` (4 bytes: `00d15188`)
+- Checks output[0] is taproot (version == 1). Agent enforces output destination = same address.
+- The agent uses this leaf for all autonomous operations. No private key needed.
+- Classified as "forfeit" by arkd (MultisigClosure) — contains server pubkey.
 
-**Leaf 2 — Alice's Spending Key (user-operated):**
-- Standard `<alice_pubkey> OP_CHECKSIG`
-- Only way to move funds to a different address (withdrawal, spending)
-- Key lives on mobile phone or hardware wallet. Never on server.
-- This is the "recursion breaker" — the only leaf that can change the covenant.
-
-**Leaf 3 — Collaborative Path (Ark protocol):**
+**Leaf 1 — Collaborative Path (user + server):**
 - `<alice_pubkey> OP_CHECKSIGVERIFY <operator_pubkey> OP_CHECKSIG`
-- Used for Arkade cooperative operations (OOR payments, round participation)
-- Standard Ark pattern
+- Used for spending (alice signs on mobile), Ark protocol operations (OOR, rounds), and forfeit transactions.
+- Key generated on mobile, pubkey imported to CLI via `golem init --import --pubkey <hex>`. Private key NEVER touches the server.
+- This is the "recursion breaker" — the only leaf that can change the covenant destination.
+- Classified as "forfeit" by arkd (MultisigClosure) — contains server pubkey.
 
-**Leaf 4 — Unilateral Exit (emergency):**
-- `<alice_pubkey> OP_CHECKSIG` with `OP_CSV <timelock>`
-- If operator disappears, Alice can exit to on-chain after timelock
-- Standard Ark safety mechanism
+**Leaf 2 — Unilateral Exit (emergency):**
+- `<sequence> OP_CSV OP_DROP <alice_pubkey> OP_CHECKSIG`
+- If operator disappears, Alice can exit to on-chain after timelock.
+- Standard Ark safety mechanism.
+- Classified as "exit" by arkd (CSVMultisigClosure).
+
+**Why three leaves, not four?** arkd's `Validate()` (in `vtxo_script.go`) classifies ALL `MultisigClosure` leaves as "forfeit closures" and requires the server pubkey in every one. An alice-only `MultisigClosure` (for independent spending) fails with `"invalid forfeit closure, signer pubkey not found"`. The standard Ark model requires server participation in all non-exit spends — the collaborative leaf serves both spending and forfeit purposes. This was validated on regtest: the 4-leaf version failed; the 3-leaf version passes.
 
 ## What This Eliminates
 
-| Component | Phase 1 (hot key) | Phase 2 (covenant) |
-|-----------|-------------------|---------------------|
-| Signing key on server | ✅ Required | ❌ Eliminated |
-| Delegation credentials | N/A | ❌ Not needed |
-| Monthly mobile provisioning | N/A | ❌ Not needed (for receive) |
-| Key deletion concerns | ✅ Risk | ❌ Key never touches server |
-| Sweep-based tier transitions | ✅ Complex | ❌ Unnecessary |
+| Component | Phase 1 (hot key) | Phase 1.5 (covenant) |
+|-----------|-------------------|----------------------|
+| Signing key on server | Required | Eliminated |
+| Delegation credentials | N/A | Not needed |
+| Monthly mobile provisioning | N/A | Not needed (for receive/refresh) |
+| Key deletion concerns | Risk | Key never touches server |
+| Sweep-based tier transitions | Complex | Unnecessary |
 
-## Open Questions (Honest)
+## Resolved Questions
 
-1. **Round/forfeit interaction:** When a covenant VTXO participates in an Ark round, does the forfeit transaction satisfy or violate the recursive covenant? If the covenant prevents forfeiture, covenant VTXOs can't participate in rounds. **This is the blocking question.** Scheduled for Tiero call.
+1. **Round/forfeit interaction:** Resolved. Covenant VTXOs participate in rounds normally. The refresh leaf (MultisigClosure with Introspector tweaked key + server) is classified as a "forfeit closure" by arkd. The server can construct forfeit transactions using this leaf. Validated on regtest.
 
-2. **Boltz coordination:** Does the Arkade-Boltz gateway (`api.boltz.mutinynet.arkade.sh`) need to support covenant VHTLCs? Or can Golem construct swaps with a custom claim script via the existing API? If Boltz must update, timeline depends on Ark Labs + Boltz coordination.
+2. **OP_SUCCESS semantics:** Confirmed safe. Arkade's VM executes these opcodes (OP_HASH160, OP_INSPECTOUTPUTSCRIPTPUBKEY, OP_INSPECTOUTPUTVALUE, OP_INSPECTINPUTSCRIPTPUBKEY, OP_GREATERTHANOREQUAL64) with proper semantics. The Introspector evaluates Arkade Script bytecode against the ark transaction context.
 
-3. **OP_SUCCESS semantics:** These opcodes use the OP_SUCCESS prefix in Arkade's VM. Need to confirm the VM never falls through to Bitcoin's unconditional-success behavior for these specific opcodes. If it did, the covenant could be bypassed.
+3. **Script size limits:** Three-leaf taptree with Arkade Scripts fits well within limits. Refresh Arkade Script is just 4 bytes (`00d15188`). Claim Arkade Script is ~73 bytes.
 
-4. **Script size limits:** Four-leaf taptree with recursive covenant script — does the total script size stay within Arkade's limits?
+## Open Questions
 
-5. **VTXO expiry:** `arkade.computer` mainnet uses 7-day VTXO expiry (verified via live API query, corrected from earlier 30-day assumption). The RefreshAgent must be reliable. Covenant refresh eliminates the signing key requirement but doesn't eliminate the liveness requirement.
+1. **Boltz coordination:** Does the Arkade-Boltz gateway (`api.boltz.mutinynet.arkade.sh`) need to support covenant VHTLCs? Or can Golem construct swaps with a custom claim script via the existing API? If Boltz must update, timeline depends on Ark Labs + Boltz coordination.
+
+2. **Recursive covenant for refresh:** The ideal recursive covenant (`OP_INSPECTINPUTSCRIPTPUBKEY == OP_INSPECTOUTPUTSCRIPTPUBKEY`) doesn't work with Ark's checkpoint architecture. `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction, so the arkTx's input scriptPubKey differs from the original VTXO's. Current workaround: check output taproot version only, agent enforces destination. Full recursive covenant requires either Introspector "trace through checkpoints" support, or arkd accepting custom checkpoint taptrees.
+
+3. **VTXO expiry:** `arkade.computer` mainnet uses 7-day VTXO expiry. The RefreshAgent must be reliable. Covenant refresh eliminates the signing key requirement but doesn't eliminate the liveness requirement.
 
 ## What Golem Has Today (Phase 1)
 
