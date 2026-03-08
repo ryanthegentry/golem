@@ -1,19 +1,17 @@
-# Recursive Covenants on Ark: Checkpoint Wrapping Limitation
+# Input Introspection Through Checkpoints: A Design Question for Ark Labs
 
-*Technical brief for Ark Labs — March 2026*
+*Technical discussion document — March 2026*
 *From: Golem (Bitcoin agent wallet on Ark)*
 
 ---
 
-## 1. Problem Statement
+## 1. What We're Building and Why This Matters
 
-Recursive covenants on Ark — where an Arkade Script enforces `input[0].scriptPubKey == output[0].scriptPubKey` — are broken by checkpoint wrapping. `buildOffchainTx` wraps every VTXO input in a 2-leaf checkpoint transaction before the Introspector evaluates the Arkade Script. `OP_INSPECTINPUTSCRIPTPUBKEY` returns the **checkpoint's** witness program, not the **original VTXO's**. This makes the fundamental covenant primitive `input == output` impossible on Ark today. The limitation is architectural — neither the Introspector nor arkd is individually at fault.
+Golem is a Bitcoin agent wallet on Ark. AI agents receive Lightning payments via L402 and hold funds in covenant-secured VTXOs. The target architecture separates key material from agent logic: the agent operates autonomously for receive and refresh operations using Arkade Script covenants, while the user's private key stays on their mobile device.
 
-## 2. Background: What We're Building
+The Introspector is stateless — it evaluates the Arkade Script against the transaction context and co-signs if the script passes. The tweaked key (`base_key + TaggedHash("ArkScriptHash", script) * G`) binds signing authority to the specific script committed in the taptree, so the Introspector doesn't need to track which VTXOs use which covenant scripts.
 
-Golem is a Bitcoin agent wallet on Ark. AI agents receive Lightning payments via L402 and hold funds in covenant-secured VTXOs. The agent operates with **zero private key material** — claims use `preimage + Introspector`, refresh uses `covenant + Introspector`. The user's private key stays on their mobile device and never touches the server.
-
-The covenant VTXO is a 3-leaf taptree:
+We have a working prototype on regtest with a 3-leaf taptree VTXO:
 
 | Leaf | Script | Purpose | Key Required |
 |------|--------|---------|-------------|
@@ -21,193 +19,168 @@ The covenant VTXO is a 3-leaf taptree:
 | 1 | `MultisigTapscript([alice, server])` | Collaborative spending + Ark ops | Alice (mobile) |
 | 2 | `CSVMultisigTapscript({timelock, alice})` | Unilateral exit | Alice (mobile) |
 
-The full lifecycle is validated on regtest: claim -> refresh -> consolidation (2->1 VTXO) -> collaborative spend. The covenant module is ~300 lines across 6 files (`src/covenant/`).
+The full lifecycle works on regtest: claim → refresh → consolidation (2→1 VTXO) → collaborative spend. The covenant module is ~300 lines across 6 files.
 
-## 3. The Limitation
+**The specific thing we want to do:** enforce that a refresh operation produces an output with the same scriptPubKey as the input — a recursive covenant. This would let the agent refresh VTXOs without any key material, with the protocol itself guaranteeing funds can't be redirected.
 
-### What happens during refresh
+## 2. What We Found: Input Introspection Returns Checkpoint Data
 
-When the agent refreshes a VTXO via Leaf 0:
+While testing recursive covenants, we discovered that `OP_INSPECTINPUTSCRIPTPUBKEY` returns the witness program of the checkpoint transaction, not the original VTXO. We understand this is a consequence of how `buildOffchainTx` constructs the transaction graph — each VTXO input gets wrapped in a checkpoint for server forfeit and unilateral settlement — and that this structure exists for good reason.
 
-1. `buildOffchainTx` creates **one checkpoint per input**. Each checkpoint wraps the VTXO in a new 2-leaf taptree (`serverUnroll + collaborative`).
-2. The `arkTx` input references the **checkpoint output**, not the original VTXO.
-3. The Introspector evaluates the Arkade Script against the `arkTx`. `OP_INSPECTINPUTSCRIPTPUBKEY` returns the checkpoint output's scriptPubKey.
+We want to understand whether this is an intended constraint of the current design, and if so, what the right way to work within it might be.
 
-### Regtest evidence
+### Regtest observations
 
-**Experiment A — Checkpoint wrapping behavior (4-byte refresh):**
+**Observation A — What input introspection sees:**
 
-```
-Input scriptPubKey (what OP_INSPECTINPUTSCRIPTPUBKEY sees):
-  512072156cab4c2f76f1d59d0c5ba549da3a13cef2db1c15f7c68938713338f95001
-
-VTXO pkScript (what we want the opcode to see):
-  5120c737670e692a76256309b9460410e78a54125cdc6d2eff94c0c5eb69c74e7b92
-
-Match: NO
-Checkpoint count: 1
-Checkpoint taptree: 2-leaf (serverUnroll + collaborative)
-4-byte refresh result: SUCCESS (txid: 0f23f418f2a0866548391ad6d8a20d206e79338a5be8fe21833a76d6440ad239)
-```
-
-The 4-byte refresh script (`00d15188`) succeeds because it only checks output taproot version, not the input's scriptPubKey.
-
-**Experiment B — 7-byte recursive covenant (input == output):**
+We refreshed a covenant VTXO using a 4-byte Arkade Script that only checks output taproot version (`00d15188`). The refresh succeeded, but we logged what the introspection opcodes actually see:
 
 ```
-7-byte recursive Arkade Script: 00d100ca7b8887
-  OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_0 OP_INSPECTINPUTSCRIPTPUBKEY OP_ROT OP_EQUALVERIFY OP_EQUAL
-
-Input scriptPubKey (checkpoint WP):
-  512093cfd84e34d7d5725d6aa432ed361991d6b115a5b00b564c78b1e1c344f7f532
-
-Output scriptPubKey (VTXO WP):
-  512028b1dee12f0422665dea2537be51893d53e7574364f11723e6a9b1c84572babd
-
-Match: NO
-7-byte refresh result: FAILED
-Error: Introspector /v1/tx failed (500): {"code":13, "message":"failed to process transaction"}
+OP_INSPECTINPUTSCRIPTPUBKEY returns: 512072156cab...  (checkpoint WP)
+Original VTXO scriptPubKey:          5120c737670e...  (VTXO WP)
+These do not match.
 ```
 
-The 7-byte script correctly implements `input[0].scriptPubKey == output[0].scriptPubKey`. It fails because `OP_INSPECTINPUTSCRIPTPUBKEY` returns `93cfd8...` (checkpoint) instead of `28b1de...` (VTXO).
+The 4-byte script passes because it doesn't inspect the input — it only verifies the output is taproot.
 
-**Experiment C — Empty checkpoints:**
+**Observation B — Recursive covenant attempt:**
 
-```
-Introspector with empty checkpoint_txs: REJECTED
-  Error: {"code":3, "message":"missing checkpoint txs"}
-
-arkd with empty checkpoints: REJECTED
-  Error: {"code":3, "message":"missing checkpoint txs"}
-```
-
-Both enforce checkpoints — there is no bypass.
-
-### The 4-byte workaround and its limitation
-
-Our current refresh Arkade Script:
+We then tested a 7-byte script implementing `input[0].scriptPubKey == output[0].scriptPubKey`:
 
 ```
-00 d1 51 88    (4 bytes)
+00d100ca7b8887
+OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_0 OP_INSPECTINPUTSCRIPTPUBKEY OP_ROT OP_EQUALVERIFY OP_EQUAL
+```
+
+This failed because the input scriptPubKey (checkpoint) doesn't match the output scriptPubKey (VTXO). The Introspector evaluated the script correctly but returned error code 13 (script evaluation failure) — the `OP_EQUAL` comparison returned false.
+
+**Observation C — Checkpoints are mandatory:**
+
+Submitting transactions with empty `checkpoint_txs` is rejected by both the Introspector and arkd with error code 3 ("missing checkpoint txs"). There's no way to bypass the wrapping.
+
+### What we're uncertain about
+
+We don't have full visibility into the checkpoint construction logic in `buildOffchainTx`, the Introspector's evaluation model, or how tightly coupled these are. Several questions follow from that:
+
+1. **Was input introspection through checkpoints considered during opcode design?** It's possible this is a known limitation with a planned resolution, or that recursive covenants on VTXOs were never an intended use case.
+
+2. **Is the checkpoint structure stable?** If it changes (additional leaves, different key derivation), any solution that assumes a specific checkpoint format would break.
+
+3. **Are there constraints we're not seeing?** The checkpoint serves server forfeit and unilateral settlement. Modifying it to preserve the VTXO's script identity might have implications for those paths that aren't obvious from the outside.
+
+## 3. What We're Currently Doing (and Its Weakness)
+
+Our working refresh uses a 4-byte Arkade Script:
+
+```
+00 d1 51 88
 OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY → [wp, ver]
 OP_1 OP_EQUALVERIFY               → ver == 1 (taproot)
-                                     stack: [wp] (truthy)
+                                     stack: [wp] (truthy, any 32-byte value)
 ```
 
-This passes for **any** taproot output address. The agent process constructs the refresh transaction to the same address, but a compromised agent could redirect to a different taproot address. Both the Introspector and arkd would co-sign it. This creates an agent-integrity dependency that the recursive covenant would eliminate.
+This passes for any taproot output. The agent process constructs the transaction to the same address, but the script doesn't enforce this. A compromised agent could redirect to a different taproot address and both the Introspector and arkd would co-sign it.
 
-## 4. Impact Beyond Golem
+**We're honest about the threat model here:** this requires compromising the agent process (not extracting a key — there is no key), constructing a valid offchain tx with a different output, and racing the VTXO owner who can spend via Leaf 1 at any time. It's dramatically better than a hot key on a server. But the recursive covenant would eliminate the agent-integrity dependency entirely — the protocol enforces same-address output, full stop.
 
-This limitation affects every application using `OP_INSPECTINPUTSCRIPTPUBKEY` on Ark:
+**Why not just have the mobile device approve each refresh?** Because the VTXO expiry on Arkade mainnet is 7 days. Weekly phone interaction for every user is a meaningfully worse UX than "set it and forget it." For L402 API providers running always-on gateways, requiring manual refresh approval defeats the purpose of autonomous operation. The covenant makes the agent trustworthy by construction, not by monitoring.
 
-- **Keyless agent wallets** (our use case): Can't enforce refresh-to-same-address without trusting the agent process
-- **Merchant receive-only addresses**: Can't build "funds can only move to my cold storage" covenants
-- **Automated treasury management**: Can't enforce "consolidate to same script" policies
-- **Any recursive covenant**: The primitive `input == output` is broken by checkpoint wrapping
+## 4. Possible Approaches (We Defer to Your Judgment)
 
-The Introspector and Arkade Script VM support a powerful set of introspection opcodes. Checkpoint wrapping means `OP_INSPECTINPUTSCRIPTPUBKEY` returns unexpected values in the most common use case (spending a VTXO). This limits input introspection to applications that don't care about the input's original script.
+We've thought about several directions, but we don't have enough visibility into Ark's internals to know which is viable or whether there's a simpler path we're missing.
 
-## 5. Proposed Solutions
+### Direction A: Opcode that resolves through checkpoints
 
-### Proposal A: New opcode `OP_INSPECTORIGINALSCRIPTPUBKEY`
+A new opcode (e.g., `OP_INSPECTORIGINALSCRIPTPUBKEY`) that returns the original VTXO's witness program by resolving through the checkpoint wrapper. The existing `OP_INSPECTINPUTSCRIPTPUBKEY` keeps its current literal semantics.
 
-A new Arkade Script opcode that resolves through the checkpoint wrapper to return the original VTXO's scriptPubKey. The existing `OP_INSPECTINPUTSCRIPTPUBKEY` keeps its current literal semantics.
+*What we like:* Clean separation — script authors explicitly choose checkpoint-resolved vs. literal behavior.
 
-| | |
-|---|---|
-| **Pros** | No behavior change to existing opcodes. Script authors explicitly choose checkpoint-resolved vs literal. Clean semantic distinction. |
-| **Cons** | Introspector must understand checkpoint structure (coupling). If checkpoint format changes, unwrapping logic must update. |
+*What concerns us:* This couples the script VM to the checkpoint structure. If the checkpoint format evolves, the resolution logic must update. This might be a layering violation you'd want to avoid.
 
-### Proposal B: Introspector Packet extension — carry original VTXO witness program
+### Direction B: Transaction builder carries original WP in the Introspector Packet
 
-Extend the OP_RETURN Introspector Packet (TLV format, magic `0x41524b`) with a new TLV record type (e.g., `0x02`) that carries the original VTXO's witness program for each input. The Introspector already parses these packets. Current record type `0x01` carries Arkade Script entries. A new record type could carry input VTXO metadata.
+Extend the OP_RETURN TLV packet (magic `0x41524b`) with a new record type carrying the original VTXO's witness program per input. The Introspector already parses these packets.
 
-| | |
-|---|---|
-| **Pros** | Uses existing TLV extension mechanism. No checkpoint coupling — the transaction builder declares the original WP. Easily auditable. |
-| **Cons** | Trust question: who provides the original WP? A malicious builder could declare a wrong WP. Verification re-introduces some checkpoint awareness. Slightly larger OP_RETURN. |
+*What we like:* Uses the existing extension mechanism. No checkpoint coupling.
 
-### Proposal C: `buildOffchainTx` preserves VTXO script in checkpoint
+*What concerns us:* Trust. The transaction builder declares the original WP. A malicious builder could lie. Verification would require the Introspector to check the declaration against the checkpoint chain — re-introducing the coupling this approach tries to avoid. That said, this trust assumption is equivalent to the 4-byte workaround's: the builder already controls output construction today. This wouldn't make things worse, it would just fail to make them better if the builder is compromised.
 
-Modify checkpoint construction so that the checkpoint's witness program matches the VTXO's. For example, include the VTXO script as an additional checkpoint leaf, or tweak the checkpoint key with the VTXO's script hash.
+### Direction C: Checkpoint preserves VTXO script identity
 
-| | |
-|---|---|
-| **Pros** | Fixes at the source. `OP_INSPECTINPUTSCRIPTPUBKEY` returns the correct value naturally. Simplest mental model. |
-| **Cons** | Modifies Ark's core transaction construction — highest risk. Checkpoint structure serves multiple purposes (server forfeit, unilateral settlement). May break existing arkd settlement logic. |
+Modify checkpoint construction so the checkpoint's witness program matches or contains the VTXO's. For example, include the VTXO script as an additional checkpoint leaf, or tweak the checkpoint key with the VTXO's script hash.
 
-## 6. Our Recommendation
+*What we like:* Fixes at the source. `OP_INSPECTINPUTSCRIPTPUBKEY` returns the right value naturally.
 
-We recommend **Proposal A** (new opcode) as the cleanest solution, with **Proposal B** (packet extension) as a pragmatic alternative if adding a new opcode is too heavy.
+*What concerns us:* This modifies Ark's core transaction construction. We don't understand enough about how checkpoint structure interacts with server forfeit paths, the connector tree, and unilateral settlement to evaluate the risk. This is your call entirely.
 
-Proposal C touches Ark's core transaction construction and carries the highest risk. We defer to your judgment on whether it's viable, but A or B achieve the same goal with less risk to existing infrastructure.
+### Direction D: Something we haven't considered
 
-## 7. Our Offer
+We may be approaching this wrong. If there's an existing mechanism, a planned feature, or a different architectural pattern that achieves "agent can refresh without key material, protocol enforces same-address output," we'd love to hear it.
 
-We will implement and test the chosen solution on regtest and submit a PR. Our covenant module and test infrastructure are ready. Specifically:
+## 5. Applications Beyond Our Use Case
 
-- **Proposal A**: We'll implement the opcode handler in our test harness and validate the 7-byte recursive covenant works end-to-end. We need a pointer to the Introspector's opcode evaluation codebase to submit the actual PR.
-- **Proposal B**: We'll extend `buildOpReturnScript()` to include the new TLV record and validate the Introspector reads it correctly. Same — need a pointer to the Introspector codebase.
-- **Proposal C**: We'll need guidance on `buildOffchainTx` internals from your team.
+We think this matters for more than just Golem, though we're obviously biased:
+
+- **Any autonomous agent managing VTXOs** needs refresh without key material. The 7-day expiry makes this operationally critical.
+- **Merchant receive-only addresses** where funds should only move to a predefined cold storage destination.
+- **Treasury policies** like "consolidate VTXOs to same script" — useful for any organization holding funds on Ark.
+- **General recursive covenants** — the `input == output` primitive is foundational. Enabling it on Ark opens a design space that currently only exists on Liquid (and there, without the off-chain scaling).
+
+## 6. What We Can Contribute
+
+We'll implement and test whatever solution you think is right on regtest and submit a PR. Our covenant module and test infrastructure are ready.
+
+We'd need:
+- **For any opcode changes:** A pointer to the Introspector's opcode evaluation codebase.
+- **For packet extensions:** Guidance on the TLV record format and Introspector parsing.
+- **For checkpoint changes:** Guidance on `buildOffchainTx` internals from your team.
+
+Or, if the right answer is "this isn't the right approach and here's why," we want to hear that too. We'd rather build on a solid foundation than push a solution that doesn't fit Ark's architecture.
 
 ---
 
-## Appendix: Evidence
+## Appendix: Regtest Evidence
 
-### A. Full Experiment Output
+### A. Experiment Output
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
-║  CHECKPOINT EXPERIMENT — Evidence for Ark Labs Technical Brief  ║
+║  CHECKPOINT EXPERIMENT — Evidence for Ark Labs Discussion       ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 arkd: regtest, Introspector: v0.0.1
 
-=== EXPERIMENT A: Checkpoint Wrapping Behavior ===
+=== OBSERVATION A: What Input Introspection Sees ===
 
 4-byte refresh Arkade Script: 00d15188
 VTXO pkScript (34 bytes): 5120c737670e692a76256309b9460410e78a54125cdc6d2eff94c0c5eb69c74e7b92
-VTXO witness program (32 bytes): c737670e692a76256309b9460410e78a54125cdc6d2eff94c0c5eb69c74e7b92
 
 Checkpoint count: 1
 Checkpoint taptree: 2-leaf (serverUnroll + collaborative)
 
-Input scriptPubKey (what OP_INSPECTINPUTSCRIPTPUBKEY sees):
+Input scriptPubKey (what OP_INSPECTINPUTSCRIPTPUBKEY returns):
   512072156cab4c2f76f1d59d0c5ba549da3a13cef2db1c15f7c68938713338f95001
-  → Checkpoint output WP: 72156cab4c2f76f1d59d0c5ba549da3a13cef2db1c15f7c68938713338f95001
 
-VTXO pkScript (what we want the opcode to see):
+Original VTXO pkScript:
   5120c737670e692a76256309b9460410e78a54125cdc6d2eff94c0c5eb69c74e7b92
-  → VTXO WP: c737670e692a76256309b9460410e78a54125cdc6d2eff94c0c5eb69c74e7b92
 
 Match: NO
-4-byte refresh result: SUCCESS (txid: 0f23f418f2a0866548391ad6d8a20d206e79338a5be8fe21833a76d6440ad239)
+4-byte refresh result: SUCCESS (txid: 0f23f418...)
 
-=== EXPERIMENT B: 7-byte Recursive Covenant Attempt ===
+=== OBSERVATION B: Recursive Covenant Attempt ===
 
-7-byte recursive Arkade Script: 00d100ca7b8887
-  Opcodes: OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_0 OP_INSPECTINPUTSCRIPTPUBKEY OP_ROT OP_EQUALVERIFY OP_EQUAL
-  Semantics: output[0].scriptPubKey == input[0].scriptPubKey
+7-byte Arkade Script: 00d100ca7b8887
+  OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_0 OP_INSPECTINPUTSCRIPTPUBKEY
+  OP_ROT OP_EQUALVERIFY OP_EQUAL
 
-7-byte VTXO pkScript: 512028b1dee12f0422665dea2537be51893d53e7574364f11723e6a9b1c84572babd
-7-byte VTXO WP: 28b1dee12f0422665dea2537be51893d53e7574364f11723e6a9b1c84572babd
-
-Input scriptPubKey (checkpoint WP):
-  512093cfd84e34d7d5725d6aa432ed361991d6b115a5b00b564c78b1e1c344f7f532
-Output scriptPubKey (VTXO WP):
-  512028b1dee12f0422665dea2537be51893d53e7574364f11723e6a9b1c84572babd
+Input scriptPubKey (checkpoint):  512093cfd84e...
+Output scriptPubKey (VTXO):       512028b1dee1...
 Match: NO
 
 7-byte refresh result: FAILED
 Error: Introspector /v1/tx failed (500): {"code":13, "message":"failed to process transaction"}
 
-Root cause: OP_INSPECTINPUTSCRIPTPUBKEY returns the checkpoint's witness program
-  (93cfd84e34d7d5725d6aa432ed361991d6b115a5b00b564c78b1e1c344f7f532),
-  not the original VTXO's witness program
-  (28b1dee12f0422665dea2537be51893d53e7574364f11723e6a9b1c84572babd).
-  buildOffchainTx wraps every input in a 2-leaf checkpoint, changing the scriptPubKey.
-
-=== EXPERIMENT C: Empty Checkpoints ===
+=== OBSERVATION C: Checkpoints Are Mandatory ===
 
 Introspector with empty checkpoint_txs: REJECTED
   Error: {"code":3, "message":"missing checkpoint txs"}
@@ -216,7 +189,7 @@ arkd with empty checkpoints: REJECTED
   Error: {"code":3, "message":"missing checkpoint txs"}
 ```
 
-### B. Three-Leaf Taptree Structure
+### B. VTXO Taptree Structure
 
 ```
                     ┌─────────────────┐
@@ -239,9 +212,9 @@ arkd with empty checkpoints: REJECTED
          └─────────┘ └────────┘
 ```
 
-### C. Refresh Arkade Script Source
+### C. Refresh Scripts
 
-**4-byte workaround** (`buildRefreshArkadeScript()` in `src/covenant/arkade-script.ts`):
+**4-byte workaround** (current):
 
 ```typescript
 export function buildRefreshArkadeScript(): Uint8Array {
@@ -253,7 +226,7 @@ export function buildRefreshArkadeScript(): Uint8Array {
 }
 ```
 
-**7-byte recursive covenant** (from `test/regtest/checkpoint-experiment.ts`):
+**7-byte recursive covenant** (target):
 
 ```typescript
 function buildRecursiveRefreshArkadeScript(): Uint8Array {
@@ -266,21 +239,3 @@ function buildRecursiveRefreshArkadeScript(): Uint8Array {
   ]);
 }
 ```
-
-### D. Leaf 0 Threat Model (4-byte workaround)
-
-From `docs/COVENANT.md`:
-
-> The refresh Arkade Script checks output taproot version only, not output destination. Hardcoding the witness program into the script is impossible due to circular dependency: the VTXO address is derived from the taptree which contains the Arkade Script which would contain the address. The output destination is enforced by the agent constructing the transaction to the same address.
->
-> *Attack conditions for refresh output redirection:*
-> - An attacker must compromise the agent process (not just extract a key — there is no key to extract).
-> - The attacker must construct a valid offchain tx with a different taproot output address.
-> - Both the Introspector AND arkd must co-sign. Neither checks output destination.
-> - The redirect can only occur during a refresh or consolidation operation.
-> - Between refresh windows, there is no transaction for the attacker to redirect.
-> - The VTXO owner can race the attacker by spending via Leaf 1 (collaborative, alice + server) from their mobile app at any time.
->
-> *Bottom line:* This is still dramatically better than a hot key on server (entire wallet extractable). In Tier 1.5, there is no key to extract. An attacker with sustained agent process access can redirect refresh outputs but must race the VTXO owner and can only act during refresh windows.
-
-The recursive covenant (`00d100ca7b8887`) would eliminate this threat model entirely — the script enforces same-address output at the protocol level, removing the agent-integrity dependency.
