@@ -1,8 +1,9 @@
 # Draft Response to Kukks — Issue #14 Comment
 
-> **Status:** DRAFT — for Ryan's review before posting
+> **Status:** REVISED DRAFT — red-teamed, for Ryan's review before posting
 > **Date:** 2026-03-08
 > **Context:** Kukks asked three design questions about the OP_INSPECTINPUTVTXOWITNESSPROGRAM proposal
+> **Red team:** See `KUKKS-RESPONSE-REDTEAM.md` for full analysis
 
 ---
 
@@ -20,7 +21,7 @@ Deferring to you on this one.
 
 ### Push format: version + program separately
 
-**Matching the `OP_INSPECTOUTPUTSCRIPTPUBKEY` / `OP_INSPECTINPUTSCRIPTPUBKEY` pattern (push version and program as separate stack items) is the right call.** This is what makes the 7-byte comparison work:
+**Matching the `OP_INSPECTOUTPUTSCRIPTPUBKEY` / `OP_INSPECTINPUTSCRIPTPUBKEY` pattern (push version and program as separate stack items) is the right call.** This is what makes the comparison work:
 
 ```
 OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY       → stack: [out_wp, out_ver]
@@ -51,7 +52,7 @@ func opcodeInspectInputVtxoScriptPubKey(op *opcode, data []byte, vm *Engine) err
 }
 ```
 
-For the TLV record, I'd suggest storing the raw `scriptPubKey` bytes (e.g., `5120{32-byte-wp}` for taproot = 34 bytes). This way the Introspector can validate it with a direct `bytes.Equal(entry.VtxoScriptPubKey, prevOut.PkScript)`, and the opcode parses it through the same `pushScriptPubKey` path that all the other scriptPubKey introspection opcodes use.
+For the TLV record, I'd suggest storing the raw `scriptPubKey` bytes (e.g., `5120{32-byte-wp}` for taproot = 34 bytes). This way the opcode parses it through the same `pushScriptPubKey` path that all the other scriptPubKey introspection opcodes use.
 
 ### TLV record validation: hard reject
 
@@ -61,7 +62,9 @@ For the TLV record, I'd suggest storing the raw `scriptPubKey` bytes (e.g., `512
 
 **2. Prevents builder fraud.** If the field were soft, a malicious transaction builder could declare any scriptPubKey, and scripts using the new opcode would receive false data. The whole purpose of this opcode is to provide trustworthy access to the original VTXO identity — that trust requires validation.
 
-**3. The validation path already exists.** The ark TX's `prevOutFetcher` returns the checkpoint output's scriptPubKey (the wrapped version — this is the problem we're solving). But the checkpoint PSBT's `Inputs[0].WitnessUtxo.PkScript` carries the **original** VTXO's scriptPubKey, since the checkpoint's input references the original VTXO directly. The cross-reference is already in `SubmitTx`:
+**3. The validation path exists for both code paths, with different strategies:**
+
+**SubmitTx** uses checkpoint traversal. The ark tx's inputs reference checkpoint outputs (due to `buildOffchainTx` wrapping), so `prevOutFetcher` returns the checkpoint's scriptPubKey, not the original VTXO's. But the checkpoint PSBT's `Inputs[0].WitnessUtxo.PkScript` carries the original VTXO's scriptPubKey (set during `buildArkTx` from the original VTXO output script). The cross-reference:
 
 ```go
 inputTxid := arkPtx.UnsignedTx.TxIn[inputIndex].PreviousOutPoint.Hash.String()
@@ -73,7 +76,20 @@ if !bytes.Equal(entry.VtxoScriptPubKey, originalPkScript) {
 }
 ```
 
-One consideration: the `SubmitIntent` path doesn't have separate checkpoint PSBTs, so validation there would need to use whatever prevout data the intent PSBT carries. Same principle, potentially different lookup path.
+**SubmitIntent** is simpler. The intent proof references original VTXOs directly — no checkpoint wrapping exists at this stage (checkpoints are created later by arkd during the round). So `prevOutFetcher` already returns the original VTXO's scriptPubKey, and validation is a direct comparison:
+
+```go
+prevOut := prevoutFetcher.FetchPrevOutput(ptx.UnsignedTx.TxIn[inputIndex].PreviousOutPoint)
+if !bytes.Equal(entry.VtxoScriptPubKey, prevOut.PkScript) {
+    return fmt.Errorf("declared VTXO scriptPubKey doesn't match actual prevout")
+}
+```
+
+### Note on multi-input consolidation
+
+The 7-byte recursive covenant (`input[0].vtxoScriptPubKey == output[0].scriptPubKey`) is sufficient for 1:1 refresh. For N:1 consolidation, the script should verify that ALL inputs' VTXO scriptPubKeys match the output, not just input[0] — otherwise a consolidation could mix VTXOs from different taptrees (same arkade script, different collaborative leaves) and send them all to input[0]'s address.
+
+This grows linearly (~7 bytes per additional input check) and is still compact for typical consolidation sizes. Not blocking for the initial implementation — just flagging that the consolidation script will be slightly longer than the 1:1 case.
 
 ### Naming note
 
