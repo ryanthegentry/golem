@@ -73,6 +73,17 @@ GolemSigner (interface)
 - No key material in logs, env vars, or error messages
 - Test on Ark mutinynet testnet
 
+## Bug Fix Protocol
+
+When fixing a bug:
+1. FIRST write a failing test that reproduces the bug exactly
+2. Verify the test fails for the right reason
+3. Fix the bug with the minimum change required
+4. Verify the test now passes
+5. Run the full test suite to confirm no regressions
+
+Never skip step 1. If you can't write a failing test, the bug isn't well-enough understood to fix.
+
 ## Reference Docs
 
 Read these when you need deeper context:
