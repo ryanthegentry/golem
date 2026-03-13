@@ -1,4 +1,4 @@
-import { Wallet, VtxoManager, Ramps, OnchainWallet, Unroll } from '@arkade-os/sdk';
+import { Wallet, VtxoManager, Ramps, OnchainWallet, Unroll, InMemoryWalletRepository, InMemoryContractRepository, WalletRepositoryImpl, ContractRepositoryImpl } from '@arkade-os/sdk';
 import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
 import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction, NetworkName } from '@arkade-os/sdk';
 import { GolemIdentity } from '../identity/golem-identity.js';
@@ -43,8 +43,17 @@ export class GolemWallet {
     const identity = new GolemIdentity(signer);
 
     const storage = config.dataDir
-      ? new FileSystemStorageAdapter(config.dataDir)
-      : undefined;
+      ? (() => {
+          const adapter = new FileSystemStorageAdapter(config.dataDir!);
+          return {
+            walletRepository: new WalletRepositoryImpl(adapter),
+            contractRepository: new ContractRepositoryImpl(adapter),
+          };
+        })()
+      : {
+          walletRepository: new InMemoryWalletRepository(),
+          contractRepository: new InMemoryContractRepository(),
+        };
 
     const sdkWallet = await Wallet.create({
       identity,

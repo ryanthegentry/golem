@@ -12,7 +12,7 @@
 import { randomBytes, createHash } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import type { ArkadeLightning } from '@arkade-os/boltz-swap';
+import type { ArkadeSwaps } from '@arkade-os/boltz-swap';
 import {
   mintL402Macaroon,
   verifyL402Token,
@@ -157,7 +157,7 @@ class RateLimiter {
  * L402 Authorization header — identical to Lightning.
  */
 export function createL402Gateway(
-  lightning: ArkadeLightning,
+  lightning: ArkadeSwaps,
   config: GatewayConfig,
 ): L402Gateway {
   const rootKeyStore = config.rootKeyStore ?? new MemoryRootKeyStore();

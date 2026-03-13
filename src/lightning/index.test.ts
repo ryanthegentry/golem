@@ -10,7 +10,7 @@ vi.mock('@arkade-os/boltz-swap', () => {
       this.network = opts.network;
       this.referralId = opts.referralId;
     }),
-    ArkadeLightning: vi.fn().mockImplementation(function (this: any, opts: any) {
+    ArkadeSwaps: vi.fn().mockImplementation(function (this: any, opts: any) {
       this.wallet = opts.wallet;
       this.swapProvider = opts.swapProvider;
       this.swapManager = opts.swapManager;
@@ -20,7 +20,7 @@ vi.mock('@arkade-os/boltz-swap', () => {
 });
 
 import { createLightning, lightningConfigFromNetwork } from './index.js';
-import { BoltzSwapProvider, ArkadeLightning } from '@arkade-os/boltz-swap';
+import { BoltzSwapProvider, ArkadeSwaps } from '@arkade-os/boltz-swap';
 import { NETWORK_CONFIGS } from '../config/networks.js';
 
 describe('lightning/index', () => {
@@ -59,13 +59,13 @@ describe('lightning/index', () => {
       });
     });
 
-    it('creates ArkadeLightning with wallet, provider, and auto-actions enabled', async () => {
+    it('creates ArkadeSwaps with wallet, provider, and auto-actions enabled', async () => {
       const fakeWallet = { id: 'test-wallet' } as any;
       const netConfig = NETWORK_CONFIGS.mutinynet;
 
       await createLightning(fakeWallet, netConfig);
 
-      expect(ArkadeLightning).toHaveBeenCalledWith(
+      expect(ArkadeSwaps).toHaveBeenCalledWith(
         expect.objectContaining({
           wallet: fakeWallet,
           swapProvider: expect.any(Object),

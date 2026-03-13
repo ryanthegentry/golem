@@ -10,7 +10,7 @@
  */
 
 import { Hono } from 'hono';
-import type { ArkadeLightning } from '@arkade-os/boltz-swap';
+import type { ArkadeSwaps } from '@arkade-os/boltz-swap';
 import {
   mintTimedL402Macaroon,
   verifyL402Token,
@@ -26,7 +26,7 @@ import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 
 interface InternalApiConfig {
-  lightning: ArkadeLightning;
+  lightning: ArkadeSwaps;
   wallet: GolemWallet;
   rootKeyStore: RootKeyStore;
   macaroonStore: MacaroonStore;

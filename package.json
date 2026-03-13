@@ -22,9 +22,11 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@arkade-os/boltz-swap": "^0.2.20",
-    "@arkade-os/sdk": "github:arkade-os/ts-sdk#arkade-script-final",
+    "@arkade-os/boltz-swap": "^0.3.3",
+    "@arkade-os/sdk": "^0.4.6",
     "@hono/node-server": "^1.19.9",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
     "@scure/btc-signer": "^2.0.1",

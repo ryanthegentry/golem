@@ -1,6 +1,6 @@
 import { hex } from '@scure/base';
-import { sha256 } from '@noble/hashes/sha2';
-import { secp256k1 } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 
 /** BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg) */
 export function taggedHash(tag: string, data: Uint8Array): Uint8Array {
