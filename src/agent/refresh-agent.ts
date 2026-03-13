@@ -1,7 +1,7 @@
 import type { ExtendedVirtualCoin } from '@arkade-os/sdk';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 import { DEFAULT_RESERVE_PER_VTXO, DEFAULT_EXIT_THRESHOLD_BLOCKS } from '../config/defaults.js';
-import { isBlockHeight, getNearestExpiryMs } from './expiry.js';
+import { isBlockHeight, getNearestExpiryMs, blockHeightToRemainingMs, BlockHeightFetcher } from './expiry.js';
 
 interface RefreshAgentConfig {
   /** How often to check for expiring VTXOs (ms). Default: 60_000 (1 min) */
@@ -9,22 +9,8 @@ interface RefreshAgentConfig {
   /**
    * Refresh VTXOs when this much time remains before expiry (ms). Default: 3 days.
    *
-   * This is passed through to the SDK's VtxoManager.getExpiringVtxos() as thresholdMs.
-   * The SDK compares it against (batchExpiry - Date.now()) where batchExpiry is stored
-   * in milliseconds.
-   *
-   * IMPORTANT — batchExpiry semantics vary by network:
-   *   - Mainnet/liquid: batchExpiry = Unix ms (server returns expiresAt in seconds,
-   *     SDK indexer multiplies by 1000).
-   *   - Regtest/mutinynet: the server may return raw block heights instead of timestamps
-   *     for expiresAt. The SDK has a heuristic workaround in isExpired() that treats
-   *     values before year 2025 as block heights and ignores them. The isVtxoExpiringSoon()
-   *     function does NOT have this guard — it will compare block heights against Date.now()
-   *     and produce nonsensical results.
-   *
-   * Dynamic safety margins require detecting whether batchExpiry is a timestamp
-   * or block height (< 1e12), then converting block heights to wall-clock time
-   * via esplora API. See src/agent/expiry.ts for the conversion stub.
+   * For block-height-based expiries (mutinynet/regtest), converted to approximate
+   * wall-clock time using current block height from esplora + 10 min avg block time.
    */
   safetyMarginMs: number;
   /** Max VTXOs before triggering proactive consolidation. Default: 10 */
@@ -35,6 +21,8 @@ interface RefreshAgentConfig {
   safeHarborAddress?: string;
   /** Blocks before VTXO expiry at which emergency exit triggers. Default: 432 (~72 hours). */
   safeHarborExitThresholdBlocks: number;
+  /** Esplora API URL for block height fetching. Required for block-height-based expiry networks. */
+  esploraUrl?: string;
 }
 
 interface EmergencyState {
@@ -88,13 +76,18 @@ export class RefreshAgent {
     emergencyExitAttempted: false,
     emergencyExitCompleted: false,
   };
+  private readonly blockHeightFetcher: BlockHeightFetcher | null;
 
   constructor(
     private readonly wallet: GolemWallet,
     private readonly config: RefreshAgentConfig = DEFAULT_REFRESH_CONFIG,
     private readonly onEvent?: RefreshEventHandler,
     private readonly gateway?: { shutdown(): void },
-  ) {}
+  ) {
+    this.blockHeightFetcher = config.esploraUrl
+      ? new BlockHeightFetcher(config.esploraUrl)
+      : null;
+  }
 
   /** Start the polling loop */
   start(): void {
@@ -135,9 +128,15 @@ export class RefreshAgent {
       );
       const dustCount = spendable.filter(v => v.value < this.config.dustThresholdSats).length;
 
+      // Fetch current block height for block-height-based expiry conversion
+      const currentBlockHeight = this.blockHeightFetcher
+        ? await this.blockHeightFetcher.getBlockHeight() ?? undefined
+        : undefined;
+
       // Compute nearest expiry across all VTXOs (ms remaining, or null if none)
       const nearestExpiryMs = getNearestExpiryMs(
         allVtxos.map(v => ({ batchExpiry: v.virtualStatus?.batchExpiry ?? 0 })),
+        currentBlockHeight,
       );
 
       // Compute total balance from spendable VTXOs (avoids extra SDK call)
@@ -157,7 +156,7 @@ export class RefreshAgent {
 
       // Emergency exit check — block-based threshold
       if (this.config.safeHarborAddress && allVtxos.length > 0) {
-        const shouldExit = this.shouldEmergencyExit(allVtxos);
+        const shouldExit = this.shouldEmergencyExit(allVtxos, currentBlockHeight);
         if (shouldExit && this.emergency.consecutiveRefreshFailures > 0) {
           await this.attemptEmergencyExit();
           return;
@@ -231,11 +230,11 @@ export class RefreshAgent {
   /**
    * Check if the closest VTXO expiry is within the emergency exit threshold (block-based).
    *
-   * The threshold is block-based, not time-based. For VTXOs with block-height-based expiry
-   * (mutinynet/regtest), we compare directly. For timestamp-based expiry (mainnet), we
-   * approximate using 10 min/block.
+   * Handles both block-height expiries (mutinynet/regtest) and timestamp expiries (mainnet).
+   * For block-height expiries, compares directly against current block height.
+   * For timestamp expiries, converts threshold blocks to ms using 10 min/block.
    */
-  private shouldEmergencyExit(vtxos: ExtendedVirtualCoin[]): boolean {
+  private shouldEmergencyExit(vtxos: ExtendedVirtualCoin[], currentBlockHeight?: number): boolean {
     const threshold = this.config.safeHarborExitThresholdBlocks;
 
     for (const vtxo of vtxos) {
@@ -243,10 +242,14 @@ export class RefreshAgent {
       if (!expiry || expiry <= 0) continue;
 
       if (isBlockHeight(expiry)) {
-        // Block-height expiry — compare directly (need current block height)
-        // For now, we can't compare without current block height.
-        // The emergency exit will rely on the SDK's expiry detection + consecutive failures.
-        // Block height comparison requires esplora API (deferred to post-PoC).
+        // Block-height expiry — compare directly using current block height
+        if (currentBlockHeight !== undefined) {
+          const blocksRemaining = expiry - currentBlockHeight;
+          if (blocksRemaining > 0 && blocksRemaining < threshold) {
+            return true;
+          }
+        }
+        // If no block height available, fall through — can't evaluate
         continue;
       }
 

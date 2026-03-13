@@ -9,7 +9,7 @@ import { GolemWallet } from '../wallet/golem-wallet.js';
 import { walletConfigFromNetwork } from '../wallet/config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from '../wallet/errors.js';
-import { RefreshAgent } from '../agent/refresh-agent.js';
+import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
@@ -38,7 +38,7 @@ const wallet = await GolemWallet.create(signer, walletConfig);
 const eventLog = new EventLog<RefreshEvent>(100);
 const sseClients = new Set<(event: RefreshEvent) => void>();
 
-const agent = new RefreshAgent(wallet, undefined, (event) => {
+const agent = new RefreshAgent(wallet, { ...DEFAULT_REFRESH_CONFIG, esploraUrl: netConfig.mempoolUrl }, (event) => {
   eventLog.push(event);
   for (const send of sseClients) {
     send(event);
@@ -51,10 +51,6 @@ console.log('RefreshAgent started');
 // --- API Key ---
 
 const apiKey = process.env.GOLEM_API_KEY;
-if (!apiKey) {
-  console.warn('WARNING: No GOLEM_API_KEY set. Fund-moving endpoints (/api/send, /api/onboard) are blocked.');
-  console.warn('         Set GOLEM_API_KEY env var to enable all API endpoints.');
-}
 
 // --- L402 Internal API ---
 
@@ -69,6 +65,12 @@ try {
 } catch (err) {
   console.warn('Lightning init failed — L402 challenge/verify will be unavailable:', err instanceof Error ? err.message : err);
 }
+
+// Hourly cleanup of expired root keys and macaroons
+const cleanupInterval = setInterval(() => {
+  rootKeyStore.cleanup();
+  macaroonStore.cleanup();
+}, 3600_000);
 
 const l402Api = lightning
   ? createInternalApi({
@@ -90,18 +92,13 @@ const app = new Hono();
 // Security headers on all responses
 app.use('*', secureHeaders());
 
-// Auth middleware — require GOLEM_API_KEY for all /api routes
+// Auth middleware — require GOLEM_API_KEY for ALL /api routes (fail-closed)
 app.use('/api/*', async (c, next) => {
-  // Fund-moving endpoints require GOLEM_API_KEY — fail-closed when unset
-  const path = new URL(c.req.url).pathname;
-  const requiresAuth = path === '/api/send' || path === '/api/onboard';
-  if (!apiKey && requiresAuth) {
-    return c.json({ error: 'GOLEM_API_KEY required for fund-moving endpoints' }, 403);
+  if (!apiKey) {
+    return c.json({ error: 'GOLEM_API_KEY required. Set env var to enable API.' }, 403);
   }
-  if (apiKey) {
-    if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+  if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
+    return c.json({ error: 'Unauthorized' }, 401);
   }
   return next();
 });
@@ -138,7 +135,18 @@ app.get('/api/transactions', async (c) => {
   }
 });
 
+// Rate limiter for /api/send — max 10 per 60 seconds (defense-in-depth on OOR cap)
+const sendRateLimit = { timestamps: [] as number[], max: 10, windowMs: 60_000 };
+
 app.post('/api/send', async (c) => {
+  // Rate limit check
+  const now = Date.now();
+  sendRateLimit.timestamps = sendRateLimit.timestamps.filter(t => now - t < sendRateLimit.windowMs);
+  if (sendRateLimit.timestamps.length >= sendRateLimit.max) {
+    return c.json({ error: 'Rate limit exceeded: max 10 sends per minute' }, 429);
+  }
+  sendRateLimit.timestamps.push(now);
+
   try {
     const body = await c.req.json<{ address: string; amount: number }>();
     if (!body.address || !body.amount) {
@@ -236,7 +244,12 @@ app.use('/*', serveStatic({ root: './src/server/public' }));
 
 // --- Start ---
 
-const hostname = process.env.GOLEM_HOST || '0.0.0.0';
+// Secure default: bind to 127.0.0.1 when no API key (local-only access)
+const hostname = process.env.GOLEM_HOST || (apiKey ? '0.0.0.0' : '127.0.0.1');
 serve({ fetch: app.fetch, port, hostname }, () => {
   console.log(`Golem server running on http://${hostname}:${port}`);
+  if (!apiKey) {
+    console.warn('WARNING: No GOLEM_API_KEY set — bound to 127.0.0.1 (local only). All /api/* endpoints blocked.');
+    console.warn('         Set GOLEM_API_KEY env var to enable remote access and API endpoints.');
+  }
 });

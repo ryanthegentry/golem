@@ -273,18 +273,20 @@ export class GolemWallet {
   }
 
   /**
-   * Check that a send amount doesn't exceed OOR exposure limits.
+   * Check that cumulative unsettled OOR exposure + requested amount doesn't exceed limits.
    *
-   * Note: This checks individual send size, not cumulative unsettled OOR exposure.
-   * Per-send check is correct for PoC. A later phase should track cumulative OOR
-   * balance by summing preconfirmed VTXOs that haven't settled into a round yet.
+   * Uses the SDK's preconfirmed balance (VTXOs not yet settled into a round) as the
+   * measure of current OOR exposure. This prevents fragmented drain attacks where many
+   * small sends individually pass but cumulatively exceed the cap.
    */
   private async enforceOorLimit(amountSats: number): Promise<void> {
     const balance = await this.getBalance();
     const percentLimit = Math.floor(balance.total * this.oorLimitFraction);
     const maxOor = Math.max(percentLimit, this.oorLimitMinSats);
 
-    if (amountSats > maxOor) {
+    // Cumulative check: preconfirmed (unsettled OOR) + this send must not exceed cap
+    const currentOor = balance.preconfirmed ?? 0;
+    if (currentOor + amountSats > maxOor) {
       throw new OorLimitExceededError(amountSats, maxOor, balance.total);
     }
   }

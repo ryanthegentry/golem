@@ -34,8 +34,10 @@ interface VerifyResult {
 
 export interface RootKeyStore {
   getKey(id: string): Buffer | null;
-  putKey(id: string, key: Buffer): void;
+  putKey(id: string, key: Buffer, expiresAt?: number): void;
   deleteKey(id: string): void;
+  /** Remove expired keys. Returns count deleted. */
+  cleanup?(): number;
 }
 
 interface MintOptions {
@@ -57,17 +59,34 @@ interface MintOptions {
  */
 export class MemoryRootKeyStore implements RootKeyStore {
   private keys = new Map<string, Buffer>();
+  private expiry = new Map<string, number>();
 
   getKey(id: string): Buffer | null {
     return this.keys.get(id) ?? null;
   }
 
-  putKey(id: string, key: Buffer): void {
+  putKey(id: string, key: Buffer, expiresAt?: number): void {
     this.keys.set(id, key);
+    if (expiresAt) this.expiry.set(id, expiresAt);
   }
 
   deleteKey(id: string): void {
     this.keys.delete(id);
+    this.expiry.delete(id);
+  }
+
+  cleanup(): number {
+    const now = Math.floor(Date.now() / 1000);
+    const BUFFER = 3600; // 1 hour grace period after expiry
+    let deleted = 0;
+    for (const [id, exp] of this.expiry) {
+      if (now > exp + BUFFER) {
+        this.keys.delete(id);
+        this.expiry.delete(id);
+        deleted++;
+      }
+    }
+    return deleted;
   }
 }
 
@@ -77,6 +96,7 @@ export class MemoryRootKeyStore implements RootKeyStore {
  */
 export class FileRootKeyStore implements RootKeyStore {
   private keys = new Map<string, Buffer>();
+  private expiry = new Map<string, number>();
   private readonly filePath: string;
 
   constructor(dir: string) {
@@ -88,13 +108,15 @@ export class FileRootKeyStore implements RootKeyStore {
     return this.keys.get(id) ?? null;
   }
 
-  putKey(id: string, key: Buffer): void {
+  putKey(id: string, key: Buffer, expiresAt?: number): void {
     this.keys.set(id, key);
+    if (expiresAt) this.expiry.set(id, expiresAt);
     this.save();
   }
 
   deleteKey(id: string): void {
     this.keys.delete(id);
+    this.expiry.delete(id);
     this.save();
   }
 
@@ -102,12 +124,36 @@ export class FileRootKeyStore implements RootKeyStore {
     return this.filePath;
   }
 
+  /** Remove root keys whose macaroon has expired (with 1-hour buffer). Returns count deleted. */
+  cleanup(): number {
+    const now = Math.floor(Date.now() / 1000);
+    const BUFFER = 3600; // 1 hour grace period
+    let deleted = 0;
+    for (const [id, exp] of this.expiry) {
+      if (now > exp + BUFFER) {
+        this.keys.delete(id);
+        this.expiry.delete(id);
+        deleted++;
+      }
+    }
+    if (deleted > 0) this.save();
+    return deleted;
+  }
+
   private load(): void {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        for (const [id, hex] of Object.entries(raw)) {
-          this.keys.set(id, Buffer.from(hex as string, 'hex'));
+        for (const [id, val] of Object.entries(raw)) {
+          if (typeof val === 'string') {
+            // Legacy format: just hex key
+            this.keys.set(id, Buffer.from(val, 'hex'));
+          } else if (val && typeof val === 'object') {
+            // New format: { key, expiresAt }
+            const entry = val as { key: string; expiresAt?: number };
+            this.keys.set(id, Buffer.from(entry.key, 'hex'));
+            if (entry.expiresAt) this.expiry.set(id, entry.expiresAt);
+          }
         }
       }
     } catch (err) {
@@ -118,9 +164,14 @@ export class FileRootKeyStore implements RootKeyStore {
   private save(): void {
     const dir = path.dirname(this.filePath);
     fs.mkdirSync(dir, { recursive: true });
-    const obj: Record<string, string> = {};
+    const obj: Record<string, unknown> = {};
     for (const [id, key] of this.keys) {
-      obj[id] = key.toString('hex');
+      const exp = this.expiry.get(id);
+      if (exp) {
+        obj[id] = { key: key.toString('hex'), expiresAt: exp };
+      } else {
+        obj[id] = key.toString('hex');
+      }
     }
     fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2) + '\n', {
       encoding: 'utf-8',
@@ -171,8 +222,9 @@ export function mintL402Macaroon(
   const rootKey = randomBytes(32);
   const rootKeyId = randomBytes(4).toString('hex');
 
-  // Store the root key
-  store.putKey(rootKeyId, rootKey);
+  // Store the root key with expiry for TTL-based cleanup
+  const expiresAtUnix = Math.floor(Date.now() / 1000) + ttlSeconds;
+  store.putKey(rootKeyId, rootKey, expiresAtUnix);
 
   // Build L402 identifier
   const identifier = buildIdentifier(paymentHash, rootKeyId);

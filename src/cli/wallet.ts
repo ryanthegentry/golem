@@ -92,13 +92,43 @@ export async function resolvePassword(config: GolemConfig): Promise<string | und
 
 export function promptSecret(prompt: string): Promise<string> {
   return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stderr, // stderr so it doesn't mix with piped stdout
-    });
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
+    // Write prompt to stderr (doesn't mix with piped stdout)
+    process.stderr.write(prompt);
+
+    // Disable echo so password characters don't appear on screen
+    const wasRaw = process.stdin.isRaw;
+    if (process.stdin.setRawMode) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+    process.stdin.setEncoding('utf-8');
+
+    let input = '';
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          // Enter pressed — done
+          process.stdin.removeListener('data', onData);
+          if (process.stdin.setRawMode) {
+            process.stdin.setRawMode(wasRaw ?? false);
+          }
+          process.stdin.pause();
+          process.stderr.write('\n');
+          resolve(input);
+          return;
+        }
+        if (ch === '\x7f' || ch === '\b') {
+          // Backspace
+          input = input.slice(0, -1);
+        } else if (ch === '\x03') {
+          // Ctrl+C — abort
+          process.stderr.write('\n');
+          process.exit(1);
+        } else if (ch >= ' ') {
+          input += ch;
+        }
+      }
+    };
+    process.stdin.on('data', onData);
   });
 }

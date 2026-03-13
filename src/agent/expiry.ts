@@ -4,6 +4,9 @@
 const BLOCK_HEIGHT_THRESHOLD = 1e9;
 const MS_THRESHOLD = 1e12;
 
+/** Average block time in ms (10 minutes for mainnet, ~30s for mutinynet/regtest). */
+const AVG_BLOCK_TIME_MS = 10 * 60 * 1000;
+
 /** True if batchExpiry is a block height rather than a Unix timestamp. */
 export function isBlockHeight(batchExpiry: number): boolean {
   return batchExpiry > 0 && batchExpiry < BLOCK_HEIGHT_THRESHOLD;
@@ -24,22 +27,86 @@ export function toExpiryInput(
   return vtxos.map(v => ({ batchExpiry: v.virtualStatus.batchExpiry }));
 }
 
-/** Smallest remaining ms until any VTXO expires, or null. Skips block-height expiries. */
+/**
+ * Convert a block-height expiry to approximate ms remaining, given current block height.
+ * Returns null if the VTXO has already expired.
+ */
+export function blockHeightToRemainingMs(
+  expiryBlock: number,
+  currentBlockHeight: number,
+  avgBlockTimeMs: number = AVG_BLOCK_TIME_MS,
+): number | null {
+  const blocksRemaining = expiryBlock - currentBlockHeight;
+  if (blocksRemaining <= 0) return null;
+  return blocksRemaining * avgBlockTimeMs;
+}
+
+/**
+ * Smallest remaining ms until any VTXO expires, or null.
+ * Handles both timestamp-based and block-height-based expiries.
+ */
 export function getNearestExpiryMs(
   vtxos: ReadonlyArray<{ batchExpiry: number }>,
+  currentBlockHeight?: number,
 ): number | null {
   const now = Date.now();
   let nearest: number | null = null;
 
   for (const vtxo of vtxos) {
     const expiry = vtxo.batchExpiry;
-    if (expiry && expiry > 0 && !isBlockHeight(expiry)) {
-      const remainingMs = normalizeExpiryMs(expiry) - now;
-      if (remainingMs > 0 && (nearest === null || remainingMs < nearest)) {
-        nearest = remainingMs;
+    if (!expiry || expiry <= 0) continue;
+
+    let remainingMs: number | null = null;
+
+    if (isBlockHeight(expiry)) {
+      if (currentBlockHeight !== undefined) {
+        remainingMs = blockHeightToRemainingMs(expiry, currentBlockHeight);
       }
+      // Skip block-height expiries if we don't have current height
+    } else {
+      remainingMs = normalizeExpiryMs(expiry) - now;
+    }
+
+    if (remainingMs !== null && remainingMs > 0 && (nearest === null || remainingMs < nearest)) {
+      nearest = remainingMs;
     }
   }
 
   return nearest;
+}
+
+/**
+ * Cached block height fetcher. Caches result for `cacheDurationMs` (default 60s).
+ */
+export class BlockHeightFetcher {
+  private cached: { height: number; fetchedAt: number } | null = null;
+  private readonly cacheDurationMs: number;
+  private readonly esploraUrl: string;
+
+  constructor(esploraUrl: string, cacheDurationMs: number = 60_000) {
+    this.esploraUrl = esploraUrl;
+    this.cacheDurationMs = cacheDurationMs;
+  }
+
+  async getBlockHeight(): Promise<number | null> {
+    const now = Date.now();
+    if (this.cached && now - this.cached.fetchedAt < this.cacheDurationMs) {
+      return this.cached.height;
+    }
+
+    try {
+      const res = await fetch(`${this.esploraUrl}/blocks/tip/height`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return this.cached?.height ?? null;
+      const text = await res.text();
+      const height = parseInt(text.trim(), 10);
+      if (isNaN(height)) return this.cached?.height ?? null;
+      this.cached = { height, fetchedAt: now };
+      return height;
+    } catch {
+      // Network error — return stale cache if available
+      return this.cached?.height ?? null;
+    }
+  }
 }

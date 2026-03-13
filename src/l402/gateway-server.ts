@@ -22,6 +22,22 @@ if (!upstreamUrl) {
   process.exit(1);
 }
 
+// Reject self-referencing upstream to prevent proxy-to-self attacks
+try {
+  const upstream = new URL(upstreamUrl);
+  const gatewayPort = parseInt(process.env.GOLEM_PORT || '8402', 10);
+  const upstreamHost = upstream.hostname;
+  const upstreamPort = parseInt(upstream.port || (upstream.protocol === 'https:' ? '443' : '80'), 10);
+  if ((upstreamHost === 'localhost' || upstreamHost === '127.0.0.1' || upstreamHost === '0.0.0.0') &&
+      upstreamPort === gatewayPort) {
+    console.error(`GOLEM_UPSTREAM_URL points to the gateway's own port (${gatewayPort}). This creates a self-proxy loop.`);
+    process.exit(1);
+  }
+} catch {
+  console.error(`Invalid GOLEM_UPSTREAM_URL: ${upstreamUrl}`);
+  process.exit(1);
+}
+
 const priceSats = parseInt(process.env.GOLEM_PRICE_SATS || '1', 10);
 const port = parseInt(process.env.GOLEM_PORT || '8402', 10);
 const freePaths = (process.env.GOLEM_FREE_PATHS || '/health,/docs').split(',').map(p => p.trim());
@@ -103,8 +119,9 @@ app.all('/*', createProxyHandler(upstreamUrl));
 
 // --- Start ---
 
-const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
-  console.log(`L402 gateway running on http://0.0.0.0:${port} ${arkAddress ? '(dual-mode: Lightning + Ark)' : '(Lightning only)'}`);
+const gatewayHost = process.env.GOLEM_GATEWAY_HOST || '0.0.0.0';
+const server = serve({ fetch: app.fetch, port, hostname: gatewayHost }, () => {
+  console.log(`L402 gateway running on http://${gatewayHost}:${port} ${arkAddress ? '(dual-mode: Lightning + Ark)' : '(Lightning only)'}`);
   console.log(`  Upstream: ${upstreamUrl}`);
   console.log(`  Price: ${priceSats} sats/request`);
   console.log(`  TTL: ${ttlSeconds}s`);

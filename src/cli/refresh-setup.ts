@@ -11,6 +11,7 @@ import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js'
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { AlertManager, loadAlertConfig, checkVtxoExpiry, checkBalance } from '../monitoring/alerts.js';
 import { EventLog } from '../server/event-log.js';
+import { getNetworkConfig } from '../config/networks.js';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 import type { GolemConfig } from './config.js';
 
@@ -35,11 +36,13 @@ export function startRefreshAgent(
   const alertConfig = loadAlertConfig();
   const alertManager = new AlertManager(alertConfig);
   const eventLog = new EventLog<RefreshEvent>();
+  const netConfig = getNetworkConfig(config.network);
 
   const refreshConfig = {
     ...DEFAULT_REFRESH_CONFIG,
     safeHarborAddress: config.safeHarborAddress,
     safeHarborExitThresholdBlocks: config.safeHarborExitThresholdBlocks,
+    esploraUrl: netConfig.mempoolUrl,
   };
 
   const agent = new RefreshAgent(wallet, refreshConfig, (event: RefreshEvent) => {

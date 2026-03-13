@@ -25,7 +25,7 @@ export async function payLightningInvoice(invoice: string): Promise<void> {
     const duration = Date.now() - startTime;
 
     console.log(`\nPayment sent!`);
-    console.log(`  Preimage: ${result.preimage}`);
+    console.log(`  Preimage: ${result.preimage.slice(0, 8)}...`);
     console.log(`  Duration: ${(duration / 1000).toFixed(1)}s`);
 
     const balance = await wallet.getBalance();

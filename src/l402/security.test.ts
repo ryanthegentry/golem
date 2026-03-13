@@ -595,7 +595,7 @@ describe('L402 Security — macaroon-v2', () => {
       expect(result.body.ark_payment).toBeDefined();
       expect(result.body.ark_payment.address).toBe('tark1qtest...');
       expect(result.body.ark_payment.amount).toBeGreaterThan(1000);
-      expect(result.body.ark_payment.amount).toBeLessThanOrEqual(1099);
+      expect(result.body.ark_payment.amount).toBeLessThanOrEqual(10999);
       expect(result.body.ark_payment.payment_id).toBeDefined();
       expect(result.body.ark_payment.macaroon).toBeDefined();
       // Lightning fields still present

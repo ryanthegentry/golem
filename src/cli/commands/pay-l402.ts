@@ -184,7 +184,7 @@ async function payViaArkOOR(
   const { preimage, macaroon } = await pollForPreimage(baseUrl, ark.payment_id);
 
   const payDuration = Date.now() - payStart;
-  console.log(`  Preimage: ${preimage}`);
+  console.log(`  Preimage: ${preimage.slice(0, 8)}...`);
   console.log(`  Payment confirmed in ${(payDuration / 1000).toFixed(1)}s (Ark OOR)`);
 
   return { macaroon, preimage, rail: 'Ark OOR' };
@@ -206,7 +206,7 @@ async function payViaLightning(
   });
 
   const payDuration = Date.now() - payStart;
-  console.log(`  Preimage: ${payResult.preimage}`);
+  console.log(`  Preimage: ${payResult.preimage.slice(0, 8)}...`);
   console.log(`  Payment confirmed in ${(payDuration / 1000).toFixed(1)}s (Lightning)`);
 
   return { macaroon: challenge.macaroon, preimage: payResult.preimage, rail: 'Lightning' };
