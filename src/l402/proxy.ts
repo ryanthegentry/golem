@@ -26,6 +26,7 @@ export function createProxyHandler(upstream: string) {
         method: c.req.method,
         headers,
         body: ['GET', 'HEAD'].includes(c.req.method) ? undefined : await c.req.text(),
+        signal: AbortSignal.timeout(60_000),  // 60s — generous for LLM inference
       });
 
       const body = await res.text();
@@ -36,6 +37,10 @@ export function createProxyHandler(upstream: string) {
         headers: { 'Content-Type': contentType },
       });
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
+        console.error(`[proxy] Upstream timeout after 60s: ${upstreamTarget}`);
+        return c.json({ error: 'Upstream timeout' }, 504);
+      }
       console.error(`[proxy] Failed to reach upstream ${upstreamTarget}:`, err instanceof Error ? err.message : err);
       return c.json({ error: 'Upstream unavailable' }, 502);
     }

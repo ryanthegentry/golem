@@ -127,6 +127,34 @@ describe('createProxyHandler', () => {
     expect(await res.text()).toBe('not found');
   });
 
+  it('passes AbortSignal.timeout to upstream fetch for request timeout', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response('ok', { status: 200, headers: { 'Content-Type': 'text/plain' } }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const handler = createProxyHandler('https://api.example.com');
+    const c = makeContext('http://localhost:8402/slow');
+    await handler(c);
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.signal).toBeDefined();
+  });
+
+  it('returns 504 on upstream timeout', async () => {
+    const err = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    const mockFetch = vi.fn().mockRejectedValue(err);
+    vi.stubGlobal('fetch', mockFetch);
+
+    const handler = createProxyHandler('https://slow.example.com');
+    const c = makeContext('http://localhost:8402/api');
+    const res = await handler(c);
+
+    expect(res.status).toBe(504);
+    const body = await res.json();
+    expect(body.error).toBe('Upstream timeout');
+  });
+
   it('defaults content-type to application/json when upstream omits it', async () => {
     // Create a response where headers.get('content-type') returns null
     const fakeRes = {

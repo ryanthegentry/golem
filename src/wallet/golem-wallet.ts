@@ -291,6 +291,14 @@ export class GolemWallet {
   }
 
   /**
+   * Dispose of key material. Delegates to signer.dispose().
+   * Call on process shutdown (SIGINT/SIGTERM) to zero secret key buffers.
+   */
+  dispose(): void {
+    this.signer.dispose();
+  }
+
+  /**
    * Check that cumulative unsettled OOR exposure + requested amount doesn't exceed limits.
    *
    * Uses the SDK's preconfirmed balance (VTXOs not yet settled into a round) as the

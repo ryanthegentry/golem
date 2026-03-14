@@ -69,6 +69,30 @@ export const gatewayCommand = new Command('gateway')
       exitWithError('--price must be a positive number of satoshis.');
     }
 
+    // Self-proxy detection — prevent infinite request amplification
+    try {
+      const upstreamUrl = new URL(opts.upstream);
+      if (upstreamUrl.protocol !== 'http:' && upstreamUrl.protocol !== 'https:') {
+        exitWithError(`Upstream URL must use http or https (got ${upstreamUrl.protocol})`);
+      }
+      const upstreamHost = upstreamUrl.hostname;
+      const upstreamPort = upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? '443' : '80');
+      if (
+        (upstreamHost === 'localhost' || upstreamHost === '127.0.0.1' || upstreamHost === '0.0.0.0') &&
+        String(upstreamPort) === String(port)
+      ) {
+        exitWithError(
+          `Upstream URL points to the gateway's own port (${port}). This creates a self-proxy loop.\n` +
+          'Set --upstream to the actual upstream service URL.'
+        );
+      }
+    } catch (err) {
+      if (err instanceof TypeError) {
+        exitWithError(`Invalid upstream URL: ${opts.upstream}`);
+      }
+      throw err;  // Re-throw exitWithError calls
+    }
+
     const { wallet, config } = await getWallet();
     const netConfig = getNetworkConfig(config.network);
     const lightning = await createLightning(wallet.sdkWallet, netConfig);
@@ -200,6 +224,8 @@ export const gatewayCommand = new Command('gateway')
               console.log(`  402index:   skipped — ${result.reason}`);
               break;
           }
+        }).catch((err) => {
+          console.error(`  402index:   registration error — ${err instanceof Error ? err.message : err}`);
         });
       }
     });
@@ -211,14 +237,19 @@ export const gatewayCommand = new Command('gateway')
       throw err;
     });
 
-    // Clean shutdown
-    process.on('SIGINT', () => {
-      bot?.stop();
-      agent.stop();
-      gateway.dispose();
-      server.close();
-      process.exit(0);
-    });
+    // Clean shutdown — zero key material on exit
+    // NOTE: On Railway, set RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10 to allow
+    // SIGTERM handlers to fire before SIGKILL (Railway default is 0 seconds).
+    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+      process.on(signal, () => {
+        bot?.stop();
+        agent.stop();
+        wallet.dispose();  // Zero signer key material
+        gateway.dispose();
+        server.close();
+        process.exit(0);
+      });
+    }
   });
 
 gatewayCommand.addCommand(gatewayInitCommand);

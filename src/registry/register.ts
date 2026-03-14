@@ -55,8 +55,12 @@ export async function registerWithIndex(params: RegistrationParams): Promise<Reg
     clearTimeout(timeout);
 
     if (response.status === 201) {
-      const data = await response.json() as { id: string; status: string };
-      return { status: 'pending', id: data.id };
+      try {
+        const data = await response.json() as { id: string; status: string };
+        return { status: 'pending', id: data.id };
+      } catch {
+        return { status: 'pending' };  // Registered but couldn't parse response
+      }
     }
 
     if (response.status === 409) {
@@ -64,8 +68,12 @@ export async function registerWithIndex(params: RegistrationParams): Promise<Reg
     }
 
     if (response.status === 422) {
-      const data = await response.json() as { error: string };
-      return { status: 'probe_failed', error: data.error };
+      try {
+        const data = await response.json() as { error: string };
+        return { status: 'probe_failed', error: data.error };
+      } catch {
+        return { status: 'probe_failed', error: 'L402 verification failed (response unparseable)' };
+      }
     }
 
     const text = await response.text().catch(() => '');

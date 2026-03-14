@@ -125,4 +125,39 @@ describe('402index registration', () => {
 
     expect(mockFetch).toHaveBeenCalledOnce();
   });
+
+  it('handles malformed JSON on 201 response without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => { throw new SyntaxError('Unexpected token'); },
+    }));
+
+    const result = await registerWithIndex({
+      registryUrl: 'https://402index.io',
+      publicUrl: 'https://my-gateway.example.com',
+      serviceName: 'Test',
+      priceSats: 10,
+    });
+
+    // Should NOT throw — should return a non-throwing status
+    expect(['pending', 'failed']).toContain(result.status);
+  });
+
+  it('handles malformed JSON on 422 response without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => { throw new SyntaxError('Unexpected token'); },
+    }));
+
+    const result = await registerWithIndex({
+      registryUrl: 'https://402index.io',
+      publicUrl: 'https://my-gateway.example.com',
+      serviceName: 'Test',
+      priceSats: 10,
+    });
+
+    expect(['probe_failed', 'failed']).toContain(result.status);
+  });
 });

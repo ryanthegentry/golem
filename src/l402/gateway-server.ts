@@ -132,10 +132,13 @@ const server = serve({ fetch: app.fetch, port, hostname: gatewayHost }, () => {
   }
 });
 
-// Clean shutdown
-process.on('SIGINT', () => {
-  console.log('\nShutting down...');
-  gateway.dispose();
-  server.close();
-  process.exit(0);
-});
+// Clean shutdown — zero key material on exit
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`\nReceived ${signal} — zeroing signer key and shutting down`);
+    signer.dispose();
+    gateway.dispose();
+    server.close();
+    process.exit(0);
+  });
+}
