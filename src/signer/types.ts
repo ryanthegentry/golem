@@ -5,7 +5,7 @@
  * between the SDK's Transaction objects and these PSBT wrappers.
  */
 
-export type SignerType = 'mock' | 'server' | 'mobile' | 'tapsigner' | 'coldcard';
+export type SignerType = 'mock' | 'server' | 'mobile' | 'tapsigner' | 'coldcard' | 'read-only';
 
 export interface SignerInfo {
   type: SignerType;

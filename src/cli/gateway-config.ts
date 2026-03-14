@@ -13,6 +13,20 @@ export interface GatewayConfig {
   description?: string;
   port?: number;
   freePaths?: string[];
+  /** Public URL agents will hit (e.g., 'https://my-gateway.example.com'). Required for 402index registration. */
+  publicUrl?: string;
+  /** Name shown in 402index directory. */
+  serviceName?: string;
+  /** Default: 'https://402index.io'. Override for self-hosted registries. */
+  registryUrl?: string;
+  /** e.g., 'ai/inference'. */
+  category?: string;
+  /** Operator contact email for 402index listing. */
+  contactEmail?: string;
+  /** JSON body for L402 verification probe. */
+  probeBody?: string;
+  /** Set false to skip 402index auto-registration on gateway start. Default: true. */
+  autoRegister?: boolean;
 }
 
 interface GatewayYaml {

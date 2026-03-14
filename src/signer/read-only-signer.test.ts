@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { getPublicKey, utils, etc } from '@noble/secp256k1';
 import { ReadOnlySigner } from './read-only-signer.js';
+import type { SignerType } from './types.js';
 
 describe('ReadOnlySigner', () => {
   const secretKey = utils.randomSecretKey();
@@ -51,6 +52,13 @@ describe('ReadOnlySigner', () => {
 
   it('rejects invalid pubkey (wrong length)', () => {
     expect(() => new ReadOnlySigner(new Uint8Array(32))).toThrow();
+  });
+
+  it('getSignerInfo().type is a valid SignerType', async () => {
+    const signer = new ReadOnlySigner(compressedPubkey);
+    const info = await signer.getSignerInfo();
+    const validTypes: SignerType[] = ['mock', 'server', 'mobile', 'tapsigner', 'coldcard', 'read-only'];
+    expect(validTypes).toContain(info.type);
   });
 
   it('rejects invalid pubkey (bad prefix)', () => {

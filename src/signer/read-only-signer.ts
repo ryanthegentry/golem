@@ -30,7 +30,7 @@ export class ReadOnlySigner implements GolemSigner {
 
   async getSignerInfo(): Promise<SignerInfo> {
     return {
-      type: 'read-only' as any,
+      type: 'read-only',
       label: 'ReadOnlySigner (read-only, no private key)',
       supportsDelegation: false,
     };

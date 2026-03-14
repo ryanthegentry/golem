@@ -15,8 +15,9 @@ import { validateBearerToken } from '../../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 import { loadAlertConfig } from '../../monitoring/alerts.js';
 import { TelegramBot } from '../../telegram/bot.js';
-import { loadGatewayConfig } from '../gateway-config.js';
+import { loadGatewayConfig, type GatewayConfig } from '../gateway-config.js';
 import { gatewayInitCommand } from './gateway-init.js';
+import { registerWithIndex } from '../../registry/register.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -29,9 +30,11 @@ export const gatewayCommand = new Command('gateway')
   .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
   .option('--trusted-proxy', 'Trust x-forwarded-for/x-real-ip headers for rate limiting (set when behind a reverse proxy)')
   .action(async (opts) => {
+    // Load golem.yaml — used for CLI fallback and 402index registration
+    const yamlConfig: GatewayConfig | null = loadGatewayConfig();
+
     // Fall back to golem.yaml if --upstream/--price not provided
     if (!opts.upstream || !opts.price) {
-      const yamlConfig = loadGatewayConfig();
       if (yamlConfig) {
         if (!opts.upstream) opts.upstream = yamlConfig.upstream;
         if (!opts.price) opts.price = String(yamlConfig.price);
@@ -167,6 +170,38 @@ export const gatewayCommand = new Command('gateway')
       console.log(`  Refresh:    ${agent.isRunning ? 'running' : 'stopped'} (${config.safeHarborAddress ? 'emergency exit enabled' : 'no safe harbor'})`);
       console.log('');
       console.log('Press Ctrl+C to stop.');
+
+      // 402index auto-registration (fire-and-forget, never blocks gateway)
+      if (yamlConfig?.autoRegister !== false && yamlConfig?.publicUrl) {
+        registerWithIndex({
+          registryUrl: yamlConfig.registryUrl ?? 'https://402index.io',
+          publicUrl: yamlConfig.publicUrl,
+          serviceName: yamlConfig.serviceName ?? 'Golem Gateway',
+          description: yamlConfig.description,
+          priceSats,
+          category: yamlConfig.category,
+          contactEmail: yamlConfig.contactEmail,
+          probeBody: yamlConfig.probeBody,
+        }).then((result) => {
+          switch (result.status) {
+            case 'pending':
+              console.log(`  402index:   registered (id: ${result.id})`);
+              break;
+            case 'already_registered':
+              console.log('  402index:   already registered');
+              break;
+            case 'probe_failed':
+              console.log(`  402index:   probe failed — ${result.error}`);
+              break;
+            case 'failed':
+              console.log(`  402index:   registration failed — ${result.error}`);
+              break;
+            case 'skipped':
+              console.log(`  402index:   skipped — ${result.reason}`);
+              break;
+          }
+        });
+      }
     });
 
     server.on('error', (err: NodeJS.ErrnoException) => {

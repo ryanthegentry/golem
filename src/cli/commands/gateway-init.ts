@@ -19,6 +19,8 @@ export const gatewayInitCommand = new Command('init')
   .option('--force', 'Overwrite existing golem.yaml')
   .option('--upstream <url>', 'Upstream URL (skip auto-discovery)')
   .option('--price <sats>', 'Price per request in sats', '10')
+  .option('--public-url <url>', 'Public URL for 402index registration')
+  .option('--service-name <name>', 'Service name for 402index listing')
   .action(async (opts) => {
     if (gatewayConfigExists() && !opts.force) {
       exitWithError(`Gateway config already exists at ${getGatewayConfigPath()}. Use --force to overwrite.`);
@@ -64,6 +66,8 @@ export const gatewayInitCommand = new Command('init')
       description,
       port: 8402,
       freePaths: ['/health', '/stats'],
+      ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
+      ...(opts.serviceName ? { serviceName: opts.serviceName } : {}),
     };
 
     saveGatewayConfig(config);
@@ -77,6 +81,13 @@ export const gatewayInitCommand = new Command('init')
       console.log(`  Description: ${config.description}`);
     }
     console.log(`  Port:       ${config.port}`);
+    if (config.publicUrl) {
+      console.log(`  Public URL: ${config.publicUrl} (402index registration enabled)`);
+    } else {
+      console.log('');
+      console.log('To auto-register with 402index.io, add to golem.yaml:');
+      console.log('  publicUrl: https://your-public-domain.com');
+    }
     console.log('');
     console.log('Run `golem gateway` to start the L402 gateway.');
   });
