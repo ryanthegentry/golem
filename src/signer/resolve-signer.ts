@@ -1,5 +1,6 @@
 import { utils } from '@noble/secp256k1';
 import { ServerSigner } from './server-signer.js';
+import { ReadOnlySigner } from './read-only-signer.js';
 import { loadConfig, configExists, configRequiresPassword } from '../cli/config.js';
 import type { GolemSigner } from './types.js';
 
@@ -39,6 +40,10 @@ export async function resolveServerSigner(): Promise<GolemSigner> {
 
   if (config.privateKey) {
     return ServerSigner.fromSecretKeyHex(config.privateKey);
+  }
+
+  if (config.publicKey) {
+    return new ReadOnlySigner(Buffer.from(config.publicKey, 'hex'));
   }
 
   throw new Error('Config has no key. Run \'golem init\' first.');

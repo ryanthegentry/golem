@@ -16,6 +16,8 @@ export interface GolemConfig {
   privateKey?: string;
   /** Encrypted private key. Present for encrypted wallets. */
   encryptedKey?: EncryptedKeyData;
+  /** Compressed public key hex (66 chars). Present for receive-only wallets (--pubkey mode). */
+  publicKey?: string;
   walletAddress: string;
   createdAt: string;
   /** On-chain Bitcoin address for emergency exit. Mandatory on mainnet, optional on testnet/mutinynet. */
@@ -66,12 +68,13 @@ export function loadConfig(): GolemConfig {
 
   const hasPrivateKey = typeof config.privateKey === 'string';
   const hasEncryptedKey = isEncryptedKeyData(config.encryptedKey);
+  const hasPublicKey = typeof config.publicKey === 'string';
 
   if (
     typeof config.version !== 'number' ||
     typeof config.network !== 'string' ||
     typeof config.arkServer !== 'string' ||
-    (!hasPrivateKey && !hasEncryptedKey) ||
+    (!hasPrivateKey && !hasEncryptedKey && !hasPublicKey) ||
     typeof config.walletAddress !== 'string' ||
     typeof config.createdAt !== 'string'
   ) {

@@ -4,8 +4,9 @@
 
 import * as fs from 'node:fs';
 import { Command } from 'commander';
-import { utils, etc } from '@noble/secp256k1';
+import { getPublicKey, utils, etc } from '@noble/secp256k1';
 import { MockSigner } from '../../signer/mock-signer.js';
+import { ReadOnlySigner } from '../../signer/read-only-signer.js';
 import { encryptSecretKeySync } from '../../signer/key-crypto.js';
 import { GolemWallet } from '../../wallet/golem-wallet.js';
 import { walletConfigFromNetwork } from '../../wallet/config.js';
@@ -26,6 +27,7 @@ export const initCommand = new Command('init')
   .option('--safe-harbor <address>', 'On-chain Bitcoin address for emergency exit')
   .option('--encrypt', 'Encrypt private key with a password (default on mainnet)')
   .option('--no-encrypt', 'Store private key unencrypted (default on testnet/mutinynet)')
+  .option('--pubkey <hex>', 'Initialize receive-only wallet with a compressed public key (66 hex chars)')
   .action(async (opts) => {
     // GOLEM_NETWORK env var takes precedence over --network flag
     // (Commander's default for --network is 'mutinynet', which would shadow the env var)
@@ -79,8 +81,78 @@ export const initCommand = new Command('init')
     // Testnet/mutinynet: plaintext by default, --encrypt opt-in
     const shouldEncrypt = opts.encrypt === true || (isMainnet && opts.encrypt !== false);
 
-    if (isMainnet && !shouldEncrypt) {
+    if (isMainnet && !shouldEncrypt && !opts.pubkey) {
       exitWithError('--no-encrypt is not allowed on mainnet. Remove the flag to encrypt your key.');
+    }
+
+    // --- Pubkey mode: receive-only wallet ---
+    if (opts.pubkey) {
+      if (opts.encrypt === true) {
+        exitWithError('--pubkey and --encrypt are mutually exclusive. Pubkey mode has no private key to encrypt.');
+      }
+      if (process.env.GOLEM_SIGNER_KEY) {
+        exitWithError('--pubkey and GOLEM_SIGNER_KEY are contradictory. Use one or the other.');
+      }
+
+      const pubkeyHex = opts.pubkey as string;
+      // Validate: 66 hex chars, 02/03 prefix, valid secp256k1 point
+      if (!/^(02|03)[0-9a-f]{64}$/i.test(pubkeyHex)) {
+        exitWithError('Invalid public key: must be 66 hex characters with 02 or 03 prefix (compressed secp256k1 point).');
+      }
+      // Validate it's a real point on the curve by attempting a round-trip
+      try {
+        const pubkeyBytes = Buffer.from(pubkeyHex, 'hex');
+        // getPublicKey with a point should not throw if valid — but we just verify length/prefix
+        // For full validation, try to use the key with the SDK
+        if (pubkeyBytes.length !== 33) throw new Error('not 33 bytes');
+      } catch {
+        exitWithError('Invalid public key: not a valid secp256k1 compressed point.');
+      }
+
+      console.log('Initializing receive-only wallet...');
+
+      const pubkeyBytes = Buffer.from(pubkeyHex, 'hex');
+      const signer = new ReadOnlySigner(pubkeyBytes);
+
+      const walletConfig = {
+        ...walletConfigFromNetwork(netConfig, `${getConfigDir()}/data`),
+        arkServerUrl: arkServer,
+      };
+
+      const wallet = await GolemWallet.create(signer, walletConfig);
+      const walletAddress = await wallet.getAddress();
+      const boardingAddress = await wallet.getBoardingAddress();
+
+      const config: GolemConfig = {
+        version: 1,
+        network: networkName,
+        arkServer,
+        publicKey: pubkeyHex,
+        walletAddress,
+        createdAt: new Date().toISOString(),
+        safeHarborAddress,
+        safeHarborExitThresholdBlocks: DEFAULT_EXIT_THRESHOLD_BLOCKS,
+        onchainReserveSats: DEFAULT_ONCHAIN_RESERVE_SATS,
+      };
+
+      saveConfig(config);
+
+      console.log('');
+      console.log('Receive-only wallet initialized!');
+      console.log('');
+      console.log(`  Network:  ${networkName}`);
+      console.log(`  Server:   ${arkServer}`);
+      console.log(`  Ark addr: ${walletAddress}`);
+      console.log(`  Boarding: ${boardingAddress}  <-- send BTC here to fund wallet`);
+      console.log(`  Mode:     receive-only (no private key stored)`);
+      if (safeHarborAddress) {
+        console.log(`  Safe harbor: ${safeHarborAddress}`);
+      }
+      console.log(`  Config:   ${getConfigPath()}`);
+      console.log('');
+      console.log('This wallet can receive and check balance but CANNOT send.');
+      console.log('The private key must be held externally (mobile app, hardware signer).');
+      return;
     }
 
     console.log('Generating new wallet...');

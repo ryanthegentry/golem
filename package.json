@@ -16,6 +16,7 @@
   "license": "ISC",
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.3.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
@@ -35,6 +36,7 @@
     "dotenv": "^17.3.1",
     "eventsource": "^4.1.0",
     "hono": "^4.12.2",
+    "js-yaml": "^4.1.1",
     "macaroon": "^3.0.4"
   }
 }

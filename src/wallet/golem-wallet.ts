@@ -3,6 +3,7 @@ import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
 import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction, NetworkName } from '@arkade-os/sdk';
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
+import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import type { GolemWalletConfig } from './config.js';
 import { OorLimitExceededError } from './errors.js';
 import { DEFAULT_RESERVE_PER_VTXO } from '../config/defaults.js';
@@ -162,6 +163,9 @@ export class GolemWallet {
    * The SDK handles OOR mechanics (preconfirm → settle at next round) internally.
    */
   async sendBitcoin(params: { address: string; amount: number }): Promise<string> {
+    if (this.signer instanceof ReadOnlySigner) {
+      throw new Error('Wallet is in receive-only mode (no private key). Sending requires a signing wallet.');
+    }
     const release = await this.acquireSendLock();
     try {
       await this.enforceOorLimit(params.amount);

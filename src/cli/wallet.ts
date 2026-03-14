@@ -8,6 +8,7 @@
 
 import * as readline from 'node:readline';
 import { ServerSigner } from '../signer/server-signer.js';
+import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
 import { walletConfigFromNetwork } from '../wallet/config.js';
 import { getNetworkConfig } from '../config/networks.js';
@@ -41,7 +42,7 @@ export async function getWallet(): Promise<{ wallet: GolemWallet; config: GolemC
  * If the config has a plaintext key, password is ignored.
  */
 export async function createWalletFromConfig(config: GolemConfig, password?: string): Promise<GolemWallet> {
-  let signer: ServerSigner;
+  let signer: ServerSigner | ReadOnlySigner;
 
   if (config.privateKey) {
     signer = ServerSigner.fromSecretKeyHex(config.privateKey);
@@ -50,8 +51,10 @@ export async function createWalletFromConfig(config: GolemConfig, password?: str
       throw new Error('Encrypted wallet requires a password. Set GOLEM_PASSWORD or run interactively.');
     }
     signer = ServerSigner.fromEncrypted(config.encryptedKey, password);
+  } else if (config.publicKey) {
+    signer = new ReadOnlySigner(Buffer.from(config.publicKey, 'hex'));
   } else {
-    throw new Error('Config has neither privateKey nor encryptedKey. Run \'golem init\' again.');
+    throw new Error('Config has neither privateKey, encryptedKey, nor publicKey. Run \'golem init\' again.');
   }
 
   const netConfig = getNetworkConfig(config.network);

@@ -15,11 +15,13 @@ import { validateBearerToken } from '../../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 import { loadAlertConfig } from '../../monitoring/alerts.js';
 import { TelegramBot } from '../../telegram/bot.js';
+import { loadGatewayConfig } from '../gateway-config.js';
+import { gatewayInitCommand } from './gateway-init.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
-  .requiredOption('--upstream <url>', 'Upstream server URL to proxy to')
-  .requiredOption('--price <sats>', 'Price per request in satoshis')
+  .option('--upstream <url>', 'Upstream server URL to proxy to')
+  .option('--price <sats>', 'Price per request in satoshis')
   .option('--port <port>', 'Port to listen on', '8402')
   .option('--currency <currency>', 'Currency for pricing', 'sats')
   .option('--description <text>', 'Description shown in 402 responses')
@@ -27,6 +29,26 @@ export const gatewayCommand = new Command('gateway')
   .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
   .option('--trusted-proxy', 'Trust x-forwarded-for/x-real-ip headers for rate limiting (set when behind a reverse proxy)')
   .action(async (opts) => {
+    // Fall back to golem.yaml if --upstream/--price not provided
+    if (!opts.upstream || !opts.price) {
+      const yamlConfig = loadGatewayConfig();
+      if (yamlConfig) {
+        if (!opts.upstream) opts.upstream = yamlConfig.upstream;
+        if (!opts.price) opts.price = String(yamlConfig.price);
+        if (!opts.port || opts.port === '8402') opts.port = String(yamlConfig.port ?? 8402);
+        if (yamlConfig.freePaths) opts.freePaths = yamlConfig.freePaths.join(',');
+        if (yamlConfig.description && !opts.description) opts.description = yamlConfig.description;
+      }
+    }
+
+    if (!opts.upstream || !opts.price) {
+      exitWithError(
+        'Missing --upstream and/or --price. Either:\n' +
+        '  1. Run `golem gateway init` to auto-configure\n' +
+        '  2. Pass --upstream <url> --price <sats> directly'
+      );
+    }
+
     if (opts.currency && opts.currency !== 'sats') {
       exitWithError('Only sats currency is supported. USD pricing coming soon.');
     }
@@ -163,3 +185,5 @@ export const gatewayCommand = new Command('gateway')
       process.exit(0);
     });
   });
+
+gatewayCommand.addCommand(gatewayInitCommand);
