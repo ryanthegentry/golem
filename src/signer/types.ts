@@ -53,4 +53,6 @@ export interface GolemSigner {
   signMessage(message: Uint8Array, type: SignatureType): Promise<Uint8Array>;
   getDelegationCredential?(): Promise<DelegationCredential>;
   ping(): Promise<SignerStatus>;
+  /** Best-effort memory zeroing. JS strings returned by decryptWithKey are GC'd non-deterministically. Same limitation as LND. */
+  dispose(): void;
 }

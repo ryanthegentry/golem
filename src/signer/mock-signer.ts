@@ -30,6 +30,7 @@ const PSBT_TX_OPTS = {
 export class MockSigner implements GolemSigner {
   readonly #secretKey: Uint8Array;
   readonly #publicKey: Uint8Array;
+  #disposed = false;
 
   protected constructor(secretKey: Uint8Array) {
     this.#secretKey = secretKey;
@@ -71,6 +72,7 @@ export class MockSigner implements GolemSigner {
    * Supports both signing all inputs and signing specific input indexes.
    */
   async signTransaction(unsignedTx: UnsignedTransaction): Promise<SignedTransaction> {
+    this.ensureNotDisposed();
     if (!unsignedTx.psbt || unsignedTx.psbt.length === 0) {
       throw new Error('MockSigner: empty transaction data');
     }
@@ -89,6 +91,7 @@ export class MockSigner implements GolemSigner {
   }
 
   async signMessage(message: Uint8Array, type: SignatureType): Promise<Uint8Array> {
+    this.ensureNotDisposed();
     if (!message || message.length === 0) {
       throw new Error('MockSigner: empty message');
     }
@@ -100,8 +103,25 @@ export class MockSigner implements GolemSigner {
 
   async ping(): Promise<SignerStatus> {
     return {
-      available: true,
+      available: !this.#disposed,
       lastSeen: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Best-effort memory zeroing. Overwrites the secret key buffer with zeros.
+   * JS strings (e.g. from decryptWithKey) are GC'd non-deterministically — same limitation as LND.
+   */
+  dispose(): void {
+    if (!this.#disposed) {
+      this.#secretKey.fill(0);
+      this.#disposed = true;
+    }
+  }
+
+  protected ensureNotDisposed(): void {
+    if (this.#disposed) {
+      throw new Error('Signer has been disposed — secret key zeroed');
+    }
   }
 }

@@ -253,3 +253,13 @@ serve({ fetch: app.fetch, port, hostname }, () => {
     console.warn('         Set GOLEM_API_KEY env var to enable remote access and API endpoints.');
   }
 });
+
+// Graceful shutdown: zero signer key material on exit
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`Received ${signal} — zeroing signer key and shutting down`);
+    signer.dispose();
+    clearInterval(cleanupInterval);
+    process.exit(0);
+  });
+}

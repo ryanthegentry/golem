@@ -80,8 +80,7 @@ export const initCommand = new Command('init')
     const shouldEncrypt = opts.encrypt === true || (isMainnet && opts.encrypt !== false);
 
     if (isMainnet && !shouldEncrypt) {
-      console.log('WARNING: Private key will be stored unencrypted on MAINNET. This is strongly discouraged.');
-      console.log('         Real bitcoin is at risk. Use --encrypt for production.');
+      exitWithError('--no-encrypt is not allowed on mainnet. Remove the flag to encrypt your key.');
     }
 
     console.log('Generating new wallet...');

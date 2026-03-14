@@ -19,6 +19,7 @@ export class GolemWallet {
   private readonly oorLimitMinSats: number;
   private readonly networkName: NetworkName;
   private onchainWallet: OnchainWallet | null = null;
+  private sendLock: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly signer: GolemSigner,
@@ -161,8 +162,21 @@ export class GolemWallet {
    * The SDK handles OOR mechanics (preconfirm → settle at next round) internally.
    */
   async sendBitcoin(params: { address: string; amount: number }): Promise<string> {
-    await this.enforceOorLimit(params.amount);
-    return this.sdkWallet.sendBitcoin(params);
+    const release = await this.acquireSendLock();
+    try {
+      await this.enforceOorLimit(params.amount);
+      return await this.sdkWallet.sendBitcoin(params);
+    } finally {
+      release();
+    }
+  }
+
+  private acquireSendLock(): Promise<() => void> {
+    let release!: () => void;
+    const next = new Promise<void>(resolve => { release = resolve; });
+    const prev = this.sendLock;
+    this.sendLock = next;
+    return prev.then(() => release);
   }
 
   /**
