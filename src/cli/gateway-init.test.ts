@@ -70,6 +70,42 @@ describe('Gateway config (golem.yaml)', () => {
   });
 });
 
+describe('Gateway config cache fields', () => {
+  it('saves and loads cache config fields', async () => {
+    const { saveGatewayConfig, loadGatewayConfig } = await import('./gateway-config.js');
+
+    saveGatewayConfig({
+      upstream: 'http://localhost:11434',
+      price: 10,
+      cacheEnabled: true,
+      cacheDefaultTtl: 1800,
+      cachePricePercent: 25,
+      cacheMaxSize: 5000,
+    });
+
+    const loaded = loadGatewayConfig();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.cacheEnabled).toBe(true);
+    expect(loaded!.cacheDefaultTtl).toBe(1800);
+    expect(loaded!.cachePricePercent).toBe(25);
+    expect(loaded!.cacheMaxSize).toBe(5000);
+  });
+
+  it('cache fields are optional (backward compat)', async () => {
+    const { saveGatewayConfig, loadGatewayConfig } = await import('./gateway-config.js');
+
+    saveGatewayConfig({
+      upstream: 'http://localhost:11434',
+      price: 10,
+    });
+
+    const loaded = loadGatewayConfig();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.cacheEnabled).toBeUndefined();
+    expect(loaded!.cacheDefaultTtl).toBeUndefined();
+  });
+});
+
 describe('Ollama discovery', () => {
   it('returns models when Ollama is reachable', async () => {
     const { discoverOllama } = await import('../discovery/ollama.js');

@@ -66,6 +66,10 @@ export const gatewayInitCommand = new Command('init')
       description,
       port: 8402,
       freePaths: ['/health', '/stats'],
+      cacheEnabled: true,
+      cacheDefaultTtl: 3600,
+      cachePricePercent: 20,
+      cacheMaxSize: 10000,
       ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
       ...(opts.serviceName ? { serviceName: opts.serviceName } : {}),
     };
@@ -81,6 +85,10 @@ export const gatewayInitCommand = new Command('init')
       console.log(`  Description: ${config.description}`);
     }
     console.log(`  Port:       ${config.port}`);
+    console.log(`  Cache:      enabled (${config.cachePricePercent}% price, ${config.cacheDefaultTtl}s TTL, max ${config.cacheMaxSize} entries)`);
+    console.log('');
+    console.log('  Note: Streaming responses (text/event-stream) are NOT cached.');
+    console.log('  For Ollama, use "stream": false in request body for cache hits.');
     if (config.publicUrl) {
       console.log(`  Public URL: ${config.publicUrl} (402index registration enabled)`);
     } else {

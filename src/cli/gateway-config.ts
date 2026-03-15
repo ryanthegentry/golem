@@ -27,6 +27,14 @@ export interface GatewayConfig {
   probeBody?: string;
   /** Set false to skip 402index auto-registration on gateway start. Default: true. */
   autoRegister?: boolean;
+  /** Enable response caching for cache-and-resell. Default: true. */
+  cacheEnabled?: boolean;
+  /** Default TTL for cached responses in seconds. Default: 3600. */
+  cacheDefaultTtl?: number;
+  /** Cache price as percentage of full price (1-100). Default: 20. */
+  cachePricePercent?: number;
+  /** Max cached entries before FIFO eviction. Default: 10000. */
+  cacheMaxSize?: number;
 }
 
 interface GatewayYaml {

@@ -23,6 +23,7 @@ import {
   createL402Gateway,
 } from './gateway.js';
 import { importMacaroon } from 'macaroon';
+import { ResponseCache } from './response-cache.js';
 
 // --- Test fixtures ---
 
@@ -795,6 +796,538 @@ describe('L402 Security — macaroon-v2', () => {
       expect(gateway.getStats().totalSatsEarned).toBe(2000);
 
       gateway.dispose();
+    });
+  });
+
+  // ─── 10. Cache-and-Resell Integration ────────────────────────────────
+
+  describe('cache-and-resell integration', () => {
+    let tmpDir: string;
+
+    function mockLightningForCache() {
+      const { preimage, paymentHash } = makePreimage();
+      return {
+        preimage,
+        paymentHash,
+        lightning: {
+          createLightningInvoice: vi.fn().mockImplementation(async ({ amount }: { amount: number }) => {
+            const { preimage: pi, paymentHash: ph } = makePreimage();
+            return { invoice: `lntbs${amount}u1ptest...`, paymentHash: ph };
+          }),
+          startSwapManager: vi.fn(),
+          dispose: vi.fn(),
+        } as any,
+      };
+    }
+
+    function makeContextWithBody(
+      urlPath: string,
+      method: string,
+      headers: Record<string, string> = {},
+      body = '',
+      query: Record<string, string> = {},
+    ) {
+      const url = new URL(`http://localhost:8402${urlPath}`);
+      for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+      let responseStatus = 200;
+      let responseBody: any = null;
+      let responseHeaders: Record<string, string> = {};
+
+      return {
+        req: {
+          url: url.toString(),
+          method,
+          header: (name: string) => headers[name.toLowerCase()],
+          query: (name: string) => query[name],
+          text: () => Promise.resolve(body),
+        },
+        json: (respBody: any, status?: number, hdrs?: Record<string, string>) => {
+          responseBody = respBody;
+          if (status) responseStatus = status;
+          if (hdrs) responseHeaders = hdrs;
+          return { status: responseStatus, body: responseBody, headers: responseHeaders };
+        },
+        _getResponse: () => ({ status: responseStatus, body: responseBody, headers: responseHeaders }),
+      };
+    }
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-cache-gw-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    });
+
+    it('402 challenge shows reduced price for cached responses', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 3600,
+      });
+
+      // Pre-populate cache
+      const key = cache.computeKey('http://localhost:11434/api/generate', 'POST', '{"prompt":"hi"}');
+      cache.put(key, {
+        upstreamUrl: 'http://localhost:11434/api/generate',
+        requestMethod: 'POST',
+        requestBodyHash: 'abc',
+        responseStatus: 200,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody: Buffer.from('{"response":"cached"}'),
+      }, 3600);
+
+      const c = makeContextWithBody('/api/generate', 'POST', {}, '{"prompt":"hi"}');
+      await gateway.middleware(c as any, vi.fn());
+      const result = c._getResponse();
+
+      expect(result.status).toBe(402);
+      expect(result.body.price).toBe(20); // 20% of 100
+      expect(result.body.fullPrice).toBe(100);
+      expect(result.headers['X-Golem-Cache']).toBe('HIT');
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('402 challenge shows full price for cache miss', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+      });
+
+      const c = makeContextWithBody('/api/generate', 'POST', {}, '{"prompt":"new"}');
+      await gateway.middleware(c as any, vi.fn());
+      const result = c._getResponse();
+
+      expect(result.status).toBe(402);
+      expect(result.body.price).toBe(100); // full price
+      expect(result.body.fullPrice).toBeUndefined();
+      expect(result.headers['X-Golem-Cache']).toBe('MISS');
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('cache hit serves cached response directly after payment', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 3600,
+      });
+
+      // Pre-populate cache
+      const key = cache.computeKey('http://localhost:11434/api/generate', 'POST', '{"prompt":"hi"}');
+      cache.put(key, {
+        upstreamUrl: 'http://localhost:11434/api/generate',
+        requestMethod: 'POST',
+        requestBodyHash: 'abc',
+        responseStatus: 200,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody: Buffer.from('{"response":"cached"}'),
+      }, 3600);
+
+      // Create valid L402 token
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/generate', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{"prompt":"hi"}');
+
+      const next = vi.fn();
+      const response = await gateway.middleware(c as any, next);
+
+      // Should NOT call next — serves from cache directly
+      expect(next).not.toHaveBeenCalled();
+      // Returns a Response object
+      expect(response).toBeInstanceOf(Response);
+      const body = await (response as Response).text();
+      expect(body).toBe('{"response":"cached"}');
+      expect((response as Response).headers.get('X-Golem-Cache')).toBe('HIT');
+
+      // Stats
+      expect(gateway.getStats().cacheHits).toBe(1);
+      expect(gateway.getStats().cacheSatsEarned).toBe(20);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('cache miss proxies upstream and caches response', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      // Mock upstream fetch
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response('{"response":"from upstream"}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 3600,
+      });
+
+      // Create valid L402 token
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/generate', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+        'content-type': 'application/json',
+      }, '{"prompt":"new"}');
+
+      const next = vi.fn();
+      const response = await gateway.middleware(c as any, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(response).toBeInstanceOf(Response);
+      const body = await (response as Response).text();
+      expect(body).toBe('{"response":"from upstream"}');
+      expect((response as Response).headers.get('X-Golem-Cache')).toBe('MISS');
+
+      // Verify it was cached
+      const key = cache.computeKey('http://localhost:11434/api/generate', 'POST', '{"prompt":"new"}');
+      const cached = cache.get(key);
+      expect(cached).not.toBeNull();
+      expect(cached!.responseBody.toString()).toBe('{"response":"from upstream"}');
+
+      expect(gateway.getStats().cacheMisses).toBe(1);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('streaming responses (text/event-stream) are NOT cached', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response('data: {"token":"hi"}\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cacheDefaultTtl: 3600,
+      });
+
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/generate', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{"prompt":"stream","stream":true}');
+
+      await gateway.middleware(c as any, vi.fn());
+
+      // Verify it was NOT cached
+      const key = cache.computeKey('http://localhost:11434/api/generate', 'POST', '{"prompt":"stream","stream":true}');
+      // get without incrementing — use a fresh cache to check
+      const stats = cache.stats();
+      expect(stats.totalEntries).toBe(0);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('non-2xx responses are NOT cached', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response('{"error":"not found"}', {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cacheDefaultTtl: 3600,
+      });
+
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/generate', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{"prompt":"fail"}');
+
+      const response = await gateway.middleware(c as any, vi.fn());
+      expect((response as Response).status).toBe(404);
+
+      expect(cache.stats().totalEntries).toBe(0);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('cache price minimum is 1 sat (never free)', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 1, // 20% of 1 = 0.2, should round up to 1
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 3600,
+      });
+
+      // Pre-populate cache
+      const key = cache.computeKey('http://localhost:11434/test', 'GET', '');
+      cache.put(key, {
+        upstreamUrl: 'http://localhost:11434/test',
+        requestMethod: 'GET',
+        requestBodyHash: '',
+        responseStatus: 200,
+        responseHeaders: { 'content-type': 'text/plain' },
+        responseBody: Buffer.from('ok'),
+      }, 3600);
+
+      const c = makeContextWithBody('/test', 'GET');
+      await gateway.middleware(c as any, vi.fn());
+      const result = c._getResponse();
+
+      expect(result.body.price).toBe(1); // minimum 1, not 0
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('free paths bypass cache entirely', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        freePaths: ['/health'],
+        cacheDefaultTtl: 3600,
+      });
+
+      const c = makeContextWithBody('/health', 'GET');
+      const next = vi.fn();
+      await gateway.middleware(c as any, next);
+
+      // Free path passes through
+      expect(next).toHaveBeenCalled();
+      expect(gateway.getStats().cacheHits).toBe(0);
+      expect(gateway.getStats().cacheMisses).toBe(0);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('gateway without cache behaves identically (backward compat)', async () => {
+      const { lightning } = mockLightningForCache();
+
+      // No cache config at all
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+      });
+
+      const c = makeContextWithBody('/api/data', 'GET');
+      await gateway.middleware(c as any, vi.fn());
+      const result = c._getResponse();
+
+      expect(result.status).toBe(402);
+      expect(result.body.price).toBe(100);
+      expect(result.headers['X-Golem-Cache']).toBeUndefined();
+
+      gateway.dispose();
+    });
+
+    it('TTL race: cache expires between challenge and payment — honors payment', async () => {
+      vi.useFakeTimers();
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      // Mock upstream for the re-fetch after cache expiry
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response('{"response":"fresh"}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 2, // 2 second TTL
+      });
+
+      // Pre-populate cache
+      const key = cache.computeKey('http://localhost:11434/api/generate', 'POST', '{"prompt":"hi"}');
+      cache.put(key, {
+        upstreamUrl: 'http://localhost:11434/api/generate',
+        requestMethod: 'POST',
+        requestBodyHash: 'abc',
+        responseStatus: 200,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody: Buffer.from('{"response":"old-cached"}'),
+      }, 2);
+
+      // Issue 402 — should be at cache price
+      const challengeCtx = makeContextWithBody('/api/generate', 'POST', {}, '{"prompt":"hi"}');
+      await gateway.middleware(challengeCtx as any, vi.fn());
+      expect(challengeCtx._getResponse().body.price).toBe(20);
+
+      // Advance time past cache TTL
+      vi.advanceTimersByTime(3000);
+
+      // Now pay — cache is expired, should proxy upstream (not issue another 402)
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const payCtx = makeContextWithBody('/api/generate', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{"prompt":"hi"}');
+
+      const response = await gateway.middleware(payCtx as any, vi.fn());
+      expect(response).toBeInstanceOf(Response);
+      const body = await (response as Response).text();
+      expect(body).toBe('{"response":"fresh"}');
+
+      gateway.dispose();
+      cache.close();
+      vi.useRealTimers();
+    });
+
+    it('cache stats are tracked in gateway stats', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cachePricePercent: 20,
+        cacheDefaultTtl: 3600,
+      });
+
+      // Cache miss
+      const { preimage: p1, paymentHash: ph1 } = makePreimage();
+      const mac1 = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash: ph1 });
+      const c1 = makeContextWithBody('/api/test', 'GET', {
+        authorization: `L402 ${mac1.macaroonBase64}:${p1}`,
+      });
+      await gateway.middleware(c1 as any, vi.fn());
+
+      // Cache hit (same request)
+      const { preimage: p2, paymentHash: ph2 } = makePreimage();
+      const mac2 = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash: ph2 });
+      const c2 = makeContextWithBody('/api/test', 'GET', {
+        authorization: `L402 ${mac2.macaroonBase64}:${p2}`,
+      });
+      await gateway.middleware(c2 as any, vi.fn());
+
+      const s = gateway.getStats();
+      expect(s.cacheMisses).toBe(1);
+      expect(s.cacheHits).toBe(1);
+      expect(s.cacheSatsEarned).toBe(20); // only cache hit earns cache sats
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('upstream timeout returns 504', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      const err = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(err));
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cacheDefaultTtl: 3600,
+      });
+
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/slow', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{}');
+
+      await gateway.middleware(c as any, vi.fn());
+      expect(c._getResponse().status).toBe(504);
+
+      gateway.dispose();
+      cache.close();
+    });
+
+    it('upstream unreachable returns 502', async () => {
+      const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
+      const { lightning } = mockLightningForCache();
+
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+
+      const gateway = createL402Gateway(lightning, {
+        priceSats: 100,
+        cache,
+        upstreamUrl: 'http://localhost:11434',
+        cacheDefaultTtl: 3600,
+      });
+
+      const { preimage, paymentHash } = makePreimage();
+      const mac = mintL402Macaroon(gateway._testInternals().rootKeyStore, { paymentHash });
+
+      const c = makeContextWithBody('/api/down', 'POST', {
+        authorization: `L402 ${mac.macaroonBase64}:${preimage}`,
+      }, '{}');
+
+      await gateway.middleware(c as any, vi.fn());
+      expect(c._getResponse().status).toBe(502);
+
+      gateway.dispose();
+      cache.close();
     });
   });
 });

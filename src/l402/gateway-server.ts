@@ -9,6 +9,7 @@ import { getNetworkConfig } from '../config/networks.js';
 import { createL402Gateway } from './gateway.js';
 import { FileRootKeyStore } from './macaroon.js';
 import { createProxyHandler } from './proxy.js';
+import { ResponseCache } from './response-cache.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
 import { createLightning } from '../lightning/index.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
@@ -46,6 +47,12 @@ const ttlSeconds = parseInt(process.env.GOLEM_TTL_SECONDS || '300', 10);
 const rateLimitPerMinute = parseInt(process.env.GOLEM_RATE_LIMIT || '30', 10);
 const dataDir = process.env.GOLEM_DATA_DIR || './data-l402';
 
+// Cache config
+const cacheEnabled = process.env.GOLEM_CACHE_ENABLED !== 'false'; // default true
+const cacheDefaultTtl = parseInt(process.env.GOLEM_CACHE_TTL || '3600', 10);
+const cachePricePercent = parseInt(process.env.GOLEM_CACHE_PRICE_PERCENT || '20', 10);
+const cacheMaxSize = parseInt(process.env.GOLEM_CACHE_MAX_SIZE || '10000', 10);
+
 // Root key store — file-backed for persistence across restarts
 const rootKeyStore = new FileRootKeyStore(dataDir);
 
@@ -74,6 +81,20 @@ try {
   console.warn('Could not get Ark address — Ark OOR payments disabled:', err instanceof Error ? err.message : err);
 }
 
+// --- Response cache ---
+
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+
+let responseCache: ResponseCache | undefined;
+if (cacheEnabled) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  responseCache = new ResponseCache(path.join(dataDir, 'response-cache.db'), {
+    maxSize: cacheMaxSize,
+  });
+  console.log(`Response cache enabled (TTL: ${cacheDefaultTtl}s, price: ${cachePricePercent}%, max: ${cacheMaxSize} entries)`);
+}
+
 // --- Gateway ---
 
 const gateway = createL402Gateway(lightning, {
@@ -85,6 +106,10 @@ const gateway = createL402Gateway(lightning, {
   rateLimitPerMinute,
   arkAddress,
   wallet: arkAddress ? wallet.sdkWallet : undefined,
+  cache: responseCache,
+  upstreamUrl: cacheEnabled ? upstreamUrl : undefined,
+  cachePricePercent,
+  cacheDefaultTtl,
 });
 
 // --- App ---
@@ -109,6 +134,20 @@ app.get('/stats', (c) => {
   return c.json(gateway.getStats());
 });
 
+// Cache stats: same auth as /stats
+app.get('/cache/stats', (c) => {
+  if (!apiKey) {
+    return c.json({ error: 'GOLEM_API_KEY required for /cache/stats' }, 403);
+  }
+  if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  if (!responseCache) {
+    return c.json({ enabled: false });
+  }
+  return c.json({ enabled: true, ...responseCache.stats() });
+});
+
 // Free: preimage endpoint (Ark OOR payment polling)
 app.get('/l402/preimage', gateway.preimageHandler);
 
@@ -118,6 +157,14 @@ app.use('/*', gateway.middleware);
 app.all('/*', createProxyHandler(upstreamUrl));
 
 // --- Start ---
+
+// Prune expired cache entries every 10 minutes
+const cachePruneInterval = responseCache
+  ? setInterval(() => {
+      const pruned = responseCache!.prune();
+      if (pruned > 0) console.log(`[cache] Pruned ${pruned} expired entries`);
+    }, 10 * 60_000)
+  : null;
 
 const gatewayHost = process.env.GOLEM_GATEWAY_HOST || '0.0.0.0';
 const server = serve({ fetch: app.fetch, port, hostname: gatewayHost }, () => {
@@ -130,6 +177,9 @@ const server = serve({ fetch: app.fetch, port, hostname: gatewayHost }, () => {
   if (arkAddress) {
     console.log(`  Ark addr: ${arkAddress}`);
   }
+  if (responseCache) {
+    console.log(`  Cache: enabled (${cachePricePercent}% of ${priceSats} sats = ${Math.max(1, Math.ceil(priceSats * cachePricePercent / 100))} sats cached, TTL: ${cacheDefaultTtl}s)`);
+  }
 });
 
 // Clean shutdown — zero key material on exit
@@ -138,6 +188,8 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\nReceived ${signal} — zeroing signer key and shutting down`);
     signer.dispose();
     gateway.dispose();
+    if (cachePruneInterval) clearInterval(cachePruneInterval);
+    if (responseCache) responseCache.close();
     server.close();
     process.exit(0);
   });

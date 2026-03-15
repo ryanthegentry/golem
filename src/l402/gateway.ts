@@ -22,6 +22,7 @@ import {
   type RootKeyStore,
 } from './macaroon.js';
 import { InvoiceLimiter } from './invoice-limiter.js';
+import type { ResponseCache } from './response-cache.js';
 
 interface PendingArkPayment {
   paymentId: string;
@@ -68,6 +69,14 @@ interface GatewayConfig {
   wallet?: ArkWalletNotifier;
   /** Called after a successful L402 payment verification. */
   onPayment?: (rail: 'lightning' | 'ark', sats: number, paymentHash: string) => void;
+  /** Response cache for cache-and-resell. */
+  cache?: ResponseCache;
+  /** Upstream URL for proxying on cache miss (required if cache is set). */
+  upstreamUrl?: string;
+  /** Cache price as percentage of full price (1-100). Default: 20. */
+  cachePricePercent?: number;
+  /** Default TTL for cached responses in seconds. Default: 3600. */
+  cacheDefaultTtl?: number;
 }
 
 interface GatewayStats {
@@ -81,6 +90,9 @@ interface GatewayStats {
   arkPaidRequests: number;
   arkEarned: number;
   arkPendingPayments: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheSatsEarned: number;
 }
 
 interface L402Gateway {
@@ -169,6 +181,13 @@ export function createL402Gateway(
   const arkEnabled = !!(config.arkAddress && config.wallet);
   const arkAddress = config.arkAddress;
 
+  // Cache-and-resell config
+  const responseCache = config.cache ?? null;
+  const upstreamUrl = config.upstreamUrl ?? null;
+  const cachePricePercent = config.cachePricePercent ?? 20;
+  const cacheDefaultTtl = config.cacheDefaultTtl ?? 3600;
+  const cacheEnabled = !!(responseCache && upstreamUrl);
+
   // Exempt /l402/preimage from rate limiting — consumers poll it every 500ms
   const rateLimiter = new RateLimiter(config.rateLimitPerMinute ?? 30, ['/l402/preimage']);
 
@@ -188,6 +207,9 @@ export function createL402Gateway(
     arkPaidRequests: 0,
     arkEarned: 0,
     arkPendingPayments: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheSatsEarned: 0,
   };
 
   /**
@@ -246,6 +268,39 @@ export function createL402Gateway(
     stats.arkPendingPayments = [...pendingPayments.values()].filter(p => !p.fulfilled && p.expiresAt > now).length;
   }, 10_000);
 
+  // Headers forwarded when proxying upstream (cache miss)
+  const FORWARDED_HEADERS = ['content-type', 'accept', 'user-agent'] as const;
+
+  /** Proxy a request to upstream and return the response. Used for cache-miss proxying. */
+  async function proxyToUpstream(
+    method: string,
+    targetUrl: string,
+    reqHeaders: (name: string) => string | undefined,
+    body: string | undefined,
+  ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+    const headers = new Headers();
+    for (const key of FORWARDED_HEADERS) {
+      const val = reqHeaders(key);
+      if (val) headers.set(key, val);
+    }
+
+    const res = await fetch(targetUrl, {
+      method,
+      headers,
+      body: ['GET', 'HEAD'].includes(method) ? undefined : body,
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const resBody = await res.text();
+    const contentType = res.headers.get('content-type') || 'application/json';
+
+    return {
+      status: res.status,
+      headers: { 'Content-Type': contentType },
+      body: resBody,
+    };
+  }
+
   const middleware: MiddlewareHandler = async (c, next) => {
     stats.totalRequests++;
 
@@ -254,6 +309,27 @@ export function createL402Gateway(
     if (freePaths.has(reqPath)) {
       return next();
     }
+
+    // --- Cache lookup (before 402 challenge, to set correct price) ---
+    const reqUrl = new URL(c.req.url);
+    // Buffer request body for cache key + potential proxy reuse (stream can only be read once)
+    const reqBody = ['GET', 'HEAD'].includes(c.req.method) ? '' : await c.req.text();
+    let cacheKey: string | null = null;
+    let cacheHit = false;
+
+    if (cacheEnabled && responseCache) {
+      const fullUpstreamUrl = `${upstreamUrl}${reqUrl.pathname}${reqUrl.search}`;
+      cacheKey = responseCache.computeKey(fullUpstreamUrl, c.req.method, reqBody);
+      const cached = responseCache.get(cacheKey);
+      if (cached) {
+        cacheHit = true;
+      }
+    }
+
+    // Determine effective price: cache hit → reduced price, miss → full price
+    const effectivePrice = cacheHit
+      ? Math.max(1, Math.ceil(priceSats * cachePricePercent / 100))
+      : priceSats;
 
     // Check for L402 Authorization header
     const authHeader = c.req.header('Authorization');
@@ -266,7 +342,7 @@ export function createL402Gateway(
           if (result.paymentHash) invoiceLimiter.markPaid(result.paymentHash);
 
           stats.paidRequests++;
-          stats.totalSatsEarned += priceSats;
+          stats.totalSatsEarned += effectivePrice;
 
           // Track per-rail stats: check if paymentHash matches a pending Ark payment
           const arkPayment = result.paymentHash
@@ -275,15 +351,78 @@ export function createL402Gateway(
           const rail: 'lightning' | 'ark' = arkPayment ? 'ark' : 'lightning';
           if (arkPayment) {
             stats.arkPaidRequests++;
-            stats.arkEarned += priceSats;
+            stats.arkEarned += effectivePrice;
           } else {
             stats.lightningPaidRequests++;
-            stats.lightningEarned += priceSats;
+            stats.lightningEarned += effectivePrice;
           }
 
           // Notify payment callback (for Telegram bot, etc.)
           if (config.onPayment && result.paymentHash) {
-            try { config.onPayment(rail, priceSats, result.paymentHash); } catch { /* never crash on callback */ }
+            try { config.onPayment(rail, effectivePrice, result.paymentHash); } catch { /* never crash on callback */ }
+          }
+
+          // --- Cache-and-resell: serve from cache or proxy-and-cache ---
+          if (cacheEnabled && responseCache && upstreamUrl && cacheKey) {
+            // Re-check cache — entry may have expired between challenge and payment
+            // (TTL race condition). If it expired, honor the payment and proxy upstream.
+            // The operator eats the price difference on this rare edge case
+            // (1-hour default TTL vs seconds-to-pay window). NEVER issue a second 402.
+            const cached = responseCache.get(cacheKey);
+
+            if (cached) {
+              // Cache hit — serve directly, record earnings
+              stats.cacheHits++;
+              stats.cacheSatsEarned += effectivePrice;
+              responseCache.recordEarnings(cacheKey, effectivePrice);
+
+              return new Response(cached.responseBody, {
+                status: cached.responseStatus,
+                headers: {
+                  ...cached.responseHeaders,
+                  'X-Golem-Cache': 'HIT',
+                },
+              });
+            }
+
+            // Cache miss (or TTL race) — proxy upstream and cache the response
+            stats.cacheMisses++;
+            try {
+              const fullTarget = `${upstreamUrl}${reqUrl.pathname}${reqUrl.search}`;
+              const upstream = await proxyToUpstream(
+                c.req.method,
+                fullTarget,
+                (name: string) => c.req.header(name),
+                reqBody || undefined,
+              );
+
+              // Only cache successful (2xx), non-streaming responses
+              const isStreaming = (upstream.headers['Content-Type'] || '').includes('text/event-stream');
+              if (upstream.status >= 200 && upstream.status < 300 && !isStreaming) {
+                responseCache.put(cacheKey, {
+                  upstreamUrl: fullTarget,
+                  requestMethod: c.req.method,
+                  requestBodyHash: createHash('sha256').update(reqBody).digest('hex'),
+                  responseStatus: upstream.status,
+                  responseHeaders: upstream.headers,
+                  responseBody: Buffer.from(upstream.body),
+                }, cacheDefaultTtl);
+              }
+
+              return new Response(upstream.body, {
+                status: upstream.status,
+                headers: {
+                  ...upstream.headers,
+                  'X-Golem-Cache': 'MISS',
+                },
+              });
+            } catch (err) {
+              if (err instanceof DOMException && err.name === 'TimeoutError') {
+                return c.json({ error: 'Upstream timeout' }, 504);
+              }
+              console.error('[l402:cache] Upstream proxy error:', err instanceof Error ? err.message : err);
+              return c.json({ error: 'Upstream unavailable' }, 502);
+            }
           }
 
           return next();
@@ -314,18 +453,24 @@ export function createL402Gateway(
     if (existing) {
       stats.challengesIssued++;
       const challenge = formatL402Challenge(existing.macaroonBase64, existing.invoice);
-      return c.json({
+      const challengeBody: Record<string, unknown> = {
         error: 'Payment Required',
         description,
-        price: priceSats,
+        price: effectivePrice,
         invoice: existing.invoice,
         macaroon: existing.macaroonBase64,
         paymentHash: existing.paymentHash,
-      }, 402, { 'WWW-Authenticate': challenge });
+      };
+      const challengeHeaders: Record<string, string> = { 'WWW-Authenticate': challenge };
+      if (cacheEnabled) {
+        challengeHeaders['X-Golem-Cache'] = cacheHit ? 'HIT' : 'MISS';
+        if (cacheHit) challengeBody.fullPrice = priceSats;
+      }
+      return c.json(challengeBody, 402, challengeHeaders);
     }
 
     try {
-      const invoiceResult = await lightning.createLightningInvoice({ amount: priceSats });
+      const invoiceResult = await lightning.createLightningInvoice({ amount: effectivePrice });
       const { macaroonBase64, paymentHash } = mintL402Macaroon(rootKeyStore, {
         paymentHash: invoiceResult.paymentHash,
         location: 'golem',
@@ -339,7 +484,7 @@ export function createL402Gateway(
         invoice: invoiceResult.invoice,
         paymentHash,
         macaroonBase64,
-        priceSats,
+        priceSats: effectivePrice,
         createdAt: Date.now(),
       });
 
@@ -349,11 +494,21 @@ export function createL402Gateway(
       const responseBody: Record<string, unknown> = {
         error: 'Payment Required',
         description,
-        price: priceSats,
+        price: effectivePrice,
         invoice: invoiceResult.invoice,
         macaroon: macaroonBase64,
         paymentHash,
       };
+
+      const responseHeaders: Record<string, string> = {
+        // WWW-Authenticate stays Lightning-only for backward compat with lnget
+        'WWW-Authenticate': challenge,
+      };
+
+      if (cacheEnabled) {
+        responseHeaders['X-Golem-Cache'] = cacheHit ? 'HIT' : 'MISS';
+        if (cacheHit) responseBody.fullPrice = priceSats;
+      }
 
       // Add Ark payment option if enabled
       if (arkEnabled && arkAddress) {
@@ -373,7 +528,7 @@ export function createL402Gateway(
         // Random 1-9999 sat suffix to disambiguate concurrent payments.
         // Birthday collision probability <1% for 50 concurrent payments.
         // Production: replace with OP_RETURN payment ID or unique VTXO descriptor matching.
-        const arkAmount = priceSats + (randomBytes(2).readUInt16BE(0) % 9999) + 1;
+        const arkAmount = effectivePrice + (randomBytes(2).readUInt16BE(0) % 9999) + 1;
 
         const pending: PendingArkPayment = {
           paymentId,
@@ -397,10 +552,7 @@ export function createL402Gateway(
 
       }
 
-      return c.json(responseBody, 402, {
-        // WWW-Authenticate stays Lightning-only for backward compat with lnget
-        'WWW-Authenticate': challenge,
-      });
+      return c.json(responseBody, 402, responseHeaders);
     } catch (err) {
       console.error('[l402] Failed to create invoice:', err instanceof Error ? err.message : err);
       return c.json({ error: 'Failed to create payment challenge' }, 500);
