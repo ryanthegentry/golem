@@ -1330,4 +1330,148 @@ describe('L402 Security — macaroon-v2', () => {
       cache.close();
     });
   });
+
+  // ─── Boltz API Resilience ─────────────────────────────────────────────
+
+  describe('Boltz API resilience', () => {
+    function makeContext(reqPath: string, headers: Record<string, string> = {}) {
+      const url = new URL(`http://localhost:8402${reqPath}`);
+      let responseStatus = 200;
+      let responseBody: any = null;
+      let responseHeaders: Record<string, string> = {};
+
+      return {
+        req: {
+          url: url.toString(),
+          method: 'GET',
+          header: (name: string) => headers[name.toLowerCase()],
+          query: () => undefined,
+        },
+        json: (body: any, status?: number, hdrs?: Record<string, string>) => {
+          responseBody = body;
+          if (status) responseStatus = status;
+          if (hdrs) responseHeaders = hdrs;
+          return { status: responseStatus, body: responseBody, headers: responseHeaders };
+        },
+        _getResponse: () => ({ status: responseStatus, body: responseBody, headers: responseHeaders }),
+      };
+    }
+
+    it('returns 503 with Retry-After when Boltz fails (not 500)', async () => {
+      const lightning = {
+        createLightningInvoice: vi.fn().mockRejectedValue(new Error('database system is in recovery mode')),
+        startSwapManager: vi.fn(),
+        dispose: vi.fn(),
+      } as any;
+
+      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const c = makeContext('/api/data');
+      await gateway.middleware(c as any, vi.fn());
+
+      expect(c._getResponse().status).toBe(503);
+      expect(c._getResponse().headers['Retry-After']).toBe('30');
+      expect(c._getResponse().body.error).toContain('temporarily unavailable');
+
+      gateway.dispose();
+    });
+
+    it('retries and succeeds on 2nd attempt', async () => {
+      const { paymentHash } = makePreimage();
+      const lightning = {
+        createLightningInvoice: vi.fn()
+          .mockRejectedValueOnce(new Error('database not ready'))
+          .mockResolvedValueOnce({ invoice: 'lntbs_retry_ok', paymentHash }),
+        startSwapManager: vi.fn(),
+        dispose: vi.fn(),
+      } as any;
+
+      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const c = makeContext('/api/data');
+      await gateway.middleware(c as any, vi.fn());
+
+      // Should get a 402 challenge (invoice created on retry), not 503
+      expect(c._getResponse().status).toBe(402);
+      expect(lightning.createLightningInvoice).toHaveBeenCalledTimes(2);
+
+      gateway.dispose();
+    });
+
+    it('circuit breaker opens after 5 recorded failures', async () => {
+      const lightning = {
+        createLightningInvoice: vi.fn().mockRejectedValue(new Error('Boltz down')),
+        startSwapManager: vi.fn(),
+        dispose: vi.fn(),
+      } as any;
+
+      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const cb = gateway._testInternals().boltzCircuitBreaker;
+
+      // Simulate 5 consecutive failures (each request records one after retries exhaust)
+      for (let i = 0; i < 5; i++) {
+        cb.record();
+      }
+
+      expect(cb.isOpen()).toBe(true);
+
+      // Verify open breaker returns 503 immediately
+      const c = makeContext('/api/data');
+      await gateway.middleware(c as any, vi.fn());
+      expect(c._getResponse().status).toBe(503);
+
+      gateway.dispose();
+    });
+
+    it('circuit breaker returns 503 immediately when open (no Boltz call)', async () => {
+      const lightning = {
+        createLightningInvoice: vi.fn(),
+        startSwapManager: vi.fn(),
+        dispose: vi.fn(),
+      } as any;
+
+      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+
+      // Directly trip the circuit breaker
+      const cb = gateway._testInternals().boltzCircuitBreaker;
+      for (let i = 0; i < 5; i++) cb.record();
+      expect(cb.isOpen()).toBe(true);
+
+      const c = makeContext('/api/data');
+      await gateway.middleware(c as any, vi.fn());
+
+      expect(c._getResponse().status).toBe(503);
+      expect(c._getResponse().headers['Retry-After']).toBe('30');
+      // Boltz should NOT have been called at all
+      expect(lightning.createLightningInvoice).not.toHaveBeenCalled();
+
+      gateway.dispose();
+    });
+
+    it('circuit breaker resets after cooldown period', async () => {
+      const { paymentHash } = makePreimage();
+      const lightning = {
+        createLightningInvoice: vi.fn().mockResolvedValue({ invoice: 'lntbs_recovered', paymentHash }),
+        startSwapManager: vi.fn(),
+        dispose: vi.fn(),
+      } as any;
+
+      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const cb = gateway._testInternals().boltzCircuitBreaker;
+
+      // Trip the circuit breaker
+      for (let i = 0; i < 5; i++) cb.record();
+      expect(cb.isOpen()).toBe(true);
+
+      // Simulate cooldown expiry
+      (cb as any).openUntil = Date.now() - 1;
+
+      // Breaker should be closed now, and Boltz call should succeed
+      const c = makeContext('/api/data');
+      await gateway.middleware(c as any, vi.fn());
+
+      expect(cb.isOpen()).toBe(false);
+      expect(c._getResponse().status).toBe(402); // 402 challenge, not 503
+
+      gateway.dispose();
+    });
+  });
 });

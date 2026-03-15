@@ -101,7 +101,7 @@ interface L402Gateway {
   getStats(): Readonly<GatewayStats>;
   dispose(): void;
   /** Exposed only for tests — do not use in production code. */
-  _testInternals(): { pendingPayments: Map<string, PendingArkPayment>; rootKeyStore: RootKeyStore };
+  _testInternals(): { pendingPayments: Map<string, PendingArkPayment>; rootKeyStore: RootKeyStore; boltzCircuitBreaker: { isOpen(): boolean; record(): void; reset(): void } };
 }
 
 /**
@@ -210,6 +210,42 @@ export function createL402Gateway(
     cacheHits: 0,
     cacheMisses: 0,
     cacheSatsEarned: 0,
+  };
+
+  // Boltz circuit breaker: after 5 consecutive failures within 60s, skip for 30s
+  const boltzCircuitBreaker = {
+    failures: [] as number[],
+    openUntil: 0,
+    maxFailures: 5,
+    windowMs: 60_000,
+    cooldownMs: 30_000,
+
+    record(): void {
+      const now = Date.now();
+      this.failures.push(now);
+      // Keep only failures within the window
+      this.failures = this.failures.filter(t => now - t < this.windowMs);
+      if (this.failures.length >= this.maxFailures) {
+        this.openUntil = now + this.cooldownMs;
+        console.warn(`[gateway] Boltz circuit breaker OPEN — skipping for ${this.cooldownMs / 1000}s after ${this.maxFailures} failures`);
+      }
+    },
+
+    isOpen(): boolean {
+      if (Date.now() >= this.openUntil) {
+        if (this.openUntil > 0) {
+          this.openUntil = 0;
+          this.failures = [];
+        }
+        return false;
+      }
+      return true;
+    },
+
+    reset(): void {
+      this.failures = [];
+      this.openUntil = 0;
+    },
   };
 
   /**
@@ -469,8 +505,46 @@ export function createL402Gateway(
       return c.json(challengeBody, 402, challengeHeaders);
     }
 
+    // Circuit breaker: if Boltz is known-down, fail fast with 503
+    if (boltzCircuitBreaker.isOpen()) {
+      return c.json(
+        { error: 'Payment service temporarily unavailable', retry_after: 30 },
+        503,
+        { 'Retry-After': '30' },
+      );
+    }
+
+    // Retry Boltz invoice creation: 3 attempts, exponential backoff (500ms, 1s, 2s)
+    let invoiceResult: { invoice: string; paymentHash: string } | null = null;
+    let lastError: unknown = null;
+    const maxRetries = 3;
+    const backoffMs = [500, 1000, 2000];
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        invoiceResult = await lightning.createLightningInvoice({ amount: effectivePrice });
+        boltzCircuitBreaker.reset();
+        break;
+      } catch (err) {
+        lastError = err;
+        console.warn(`[gateway] Boltz retry ${attempt}/${maxRetries}: ${err instanceof Error ? err.message : err}`);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, backoffMs[attempt - 1]));
+        }
+      }
+    }
+
+    if (!invoiceResult) {
+      boltzCircuitBreaker.record();
+      console.error('[l402] Boltz invoice creation failed after retries:', lastError instanceof Error ? lastError.message : lastError);
+      return c.json(
+        { error: 'Payment service temporarily unavailable', retry_after: 30 },
+        503,
+        { 'Retry-After': '30' },
+      );
+    }
+
     try {
-      const invoiceResult = await lightning.createLightningInvoice({ amount: effectivePrice });
       const { macaroonBase64, paymentHash } = mintL402Macaroon(rootKeyStore, {
         paymentHash: invoiceResult.paymentHash,
         location: 'golem',
@@ -554,7 +628,7 @@ export function createL402Gateway(
 
       return c.json(responseBody, 402, responseHeaders);
     } catch (err) {
-      console.error('[l402] Failed to create invoice:', err instanceof Error ? err.message : err);
+      console.error('[l402] Failed to create payment challenge:', err instanceof Error ? err.message : err);
       return c.json({ error: 'Failed to create payment challenge' }, 500);
     }
   };
@@ -597,6 +671,6 @@ export function createL402Gateway(
     preimageHandler,
     getStats: (): Readonly<GatewayStats> => ({ ...stats }),
     dispose,
-    _testInternals: () => ({ pendingPayments, rootKeyStore }),
+    _testInternals: () => ({ pendingPayments, rootKeyStore, boltzCircuitBreaker }),
   };
 }

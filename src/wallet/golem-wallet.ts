@@ -71,9 +71,11 @@ export class GolemWallet {
       storage,
     });
 
-    const vtxoManager = new VtxoManager(sdkWallet, {
-      enabled: true,
-    });
+    const vtxoManager = new VtxoManager(
+      sdkWallet,
+      undefined, // deprecated renewalConfig — skip
+      { vtxoThreshold: 259200 }, // 3 days in seconds
+    );
 
     return new GolemWallet(signer, identity, sdkWallet, vtxoManager, config);
   }
