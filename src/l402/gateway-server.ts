@@ -68,7 +68,7 @@ const signer = await resolveServerSigner().catch((err) => {
 const netConfig = getNetworkConfig();
 const wallet = await GolemWallet.create(signer, walletConfigFromNetwork(netConfig, dataDir));
 
-const lightning = await createLightning(wallet.sdkWallet, netConfig);
+const lightning = await createLightning(wallet.sdkWallet, netConfig, dataDir);
 console.log('SwapManager started');
 
 // --- Ark address for OOR payments ---

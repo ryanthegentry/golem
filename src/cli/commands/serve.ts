@@ -31,7 +31,7 @@ export const serveCommand = new Command('serve')
 
     const netConfig = getNetworkConfig(config.network);
     const dataDir = getDataDir();
-    const lightning = await createLightning(wallet.sdkWallet, netConfig);
+    const lightning = await createLightning(wallet.sdkWallet, netConfig, dataDir);
 
     // Start RefreshAgent for VTXO protection
     const { agent, alertManager, eventLog } = startRefreshAgent(wallet, config);

@@ -8,6 +8,7 @@
 
 import { Command } from 'commander';
 import { getWallet, exitWithError } from '../wallet.js';
+import { getDataDir } from '../config.js';
 import { getNetworkConfig } from '../../config/networks.js';
 import { createLightning } from '../../lightning/index.js';
 
@@ -30,7 +31,7 @@ export const receiveCommand = new Command('receive')
     const { wallet, config } = await getWallet();
 
     const netConfig = getNetworkConfig(config.network);
-    const lightning = await createLightning(wallet.sdkWallet, netConfig);
+    const lightning = await createLightning(wallet.sdkWallet, netConfig, getDataDir());
 
     console.log(`Creating invoice for ${amount.toLocaleString()} sats...\n`);
 

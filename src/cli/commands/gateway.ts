@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { getWallet, exitWithError } from '../wallet.js';
+import { getDataDir } from '../config.js';
 import { startRefreshAgent } from '../refresh-setup.js';
 import { createL402Gateway } from '../../l402/gateway.js';
 import { createProxyHandler } from '../../l402/proxy.js';
@@ -95,7 +96,7 @@ export const gatewayCommand = new Command('gateway')
 
     const { wallet, config } = await getWallet();
     const netConfig = getNetworkConfig(config.network);
-    const lightning = await createLightning(wallet.sdkWallet, netConfig);
+    const lightning = await createLightning(wallet.sdkWallet, netConfig, getDataDir());
 
     // Start RefreshAgent for VTXO protection
     // Pass gateway shutdown handle so emergency exit can stop accepting payments

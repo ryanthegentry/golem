@@ -6,6 +6,7 @@
  */
 
 import { getWallet, exitWithError } from '../wallet.js';
+import { getDataDir } from '../config.js';
 import { getNetworkConfig, type NetworkConfig } from '../../config/networks.js';
 import { createLightning } from '../../lightning/index.js';
 import type { GolemWallet } from '../../wallet/golem-wallet.js';
@@ -199,7 +200,7 @@ async function payViaLightning(
   console.log('Paying invoice via Lightning (Ark → Boltz → Lightning)...');
   const payStart = Date.now();
 
-  const lightning = await createLightning(wallet.sdkWallet, netConfig);
+  const lightning = await createLightning(wallet.sdkWallet, netConfig, getDataDir());
 
   const payResult = await lightning.sendLightningPayment({
     invoice: challenge.invoice,

@@ -60,7 +60,7 @@ const macaroonStore = new MacaroonStore(`${l402DataDir}/macaroons.db`);
 
 let lightning: Awaited<ReturnType<typeof createLightning>> | null = null;
 try {
-  lightning = await createLightning(wallet.sdkWallet, netConfig);
+  lightning = await createLightning(wallet.sdkWallet, netConfig, l402DataDir);
   console.log('Lightning (SwapManager) started for L402');
 } catch (err) {
   console.warn('Lightning init failed — L402 challenge/verify will be unavailable:', err instanceof Error ? err.message : err);

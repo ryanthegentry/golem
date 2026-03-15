@@ -1,11 +1,15 @@
-import { Wallet, VtxoManager, Ramps, OnchainWallet, Unroll, InMemoryWalletRepository, InMemoryContractRepository, WalletRepositoryImpl, ContractRepositoryImpl } from '@arkade-os/sdk';
-import { FileSystemStorageAdapter } from '@arkade-os/sdk/adapters/fileSystem';
+import { Wallet, VtxoManager, Ramps, OnchainWallet, Unroll, InMemoryWalletRepository, InMemoryContractRepository } from '@arkade-os/sdk';
+import { SQLiteWalletRepository, SQLiteContractRepository } from '@arkade-os/sdk/repositories/sqlite';
 import type { WalletBalance, ExtendedVirtualCoin, ExtendedCoin, SettlementEvent, ArkTransaction, NetworkName } from '@arkade-os/sdk';
+import Database from 'better-sqlite3';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { GolemIdentity } from '../identity/golem-identity.js';
 import type { GolemSigner, SignerInfo } from '../signer/types.js';
 import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import type { GolemWalletConfig } from './config.js';
 import { OorLimitExceededError } from './errors.js';
+import { createSQLExecutor } from '../storage/sqlite-executor.js';
 import { DEFAULT_RESERVE_PER_VTXO } from '../config/defaults.js';
 
 /**
@@ -46,10 +50,13 @@ export class GolemWallet {
 
     const storage = config.dataDir
       ? (() => {
-          const adapter = new FileSystemStorageAdapter(config.dataDir!);
+          fs.mkdirSync(config.dataDir!, { recursive: true });
+          const db = new Database(path.join(config.dataDir!, 'ark-sdk.db'));
+          db.pragma('journal_mode = DELETE');
+          const executor = createSQLExecutor(db);
           return {
-            walletRepository: new WalletRepositoryImpl(adapter),
-            contractRepository: new ContractRepositoryImpl(adapter),
+            walletRepository: new SQLiteWalletRepository(executor),
+            contractRepository: new SQLiteContractRepository(executor),
           };
         })()
       : {

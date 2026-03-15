@@ -5,6 +5,7 @@
  */
 
 import { getWallet, exitWithError } from '../wallet.js';
+import { getDataDir } from '../config.js';
 import { getNetworkConfig } from '../../config/networks.js';
 import { createLightning } from '../../lightning/index.js';
 
@@ -14,7 +15,7 @@ export async function payLightningInvoice(invoice: string): Promise<void> {
   const { wallet, config } = await getWallet();
 
   const netConfig = getNetworkConfig(config.network);
-  const lightning = await createLightning(wallet.sdkWallet, netConfig);
+  const lightning = await createLightning(wallet.sdkWallet, netConfig, getDataDir());
 
   console.log(`Paying Lightning invoice (Ark → Boltz → Lightning)...`);
   console.log(`  Invoice: ${invoice.slice(0, 60)}...`);
