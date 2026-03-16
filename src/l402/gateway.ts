@@ -426,7 +426,9 @@ export function createL402Gateway(
               stats.cacheSatsEarned += effectivePrice;
               responseCache.recordEarnings(cacheKey, effectivePrice);
 
-              return new Response(cached.responseBody, {
+              // Node.js Buffer is a Uint8Array subclass and valid as BodyInit at runtime.
+              // TypeScript 5.7+ @types/node incorrectly excludes it from the BodyInit union.
+              return new Response(cached.responseBody as any, {
                 status: cached.responseStatus,
                 headers: {
                   ...cached.responseHeaders,
