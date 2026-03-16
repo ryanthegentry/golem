@@ -57,6 +57,18 @@ export class TelegramBot {
     this.lastAlertTime = time;
   }
 
+  /** Push auto-sweep success notification to the chat. */
+  async notifySweep(amountSats: number, destination: string): Promise<void> {
+    const text = `*Auto\\-Sweep*\n\nSent: \`${amountSats.toLocaleString()}\` sats\nTo: \`${escapeMarkdownV2(destination)}\``;
+    await this.sendMessage(text, 'MarkdownV2');
+  }
+
+  /** Push auto-sweep failure notification to the chat. */
+  async notifySweepError(error: string): Promise<void> {
+    const text = `*Auto\\-Sweep Failed*\n\n${escapeMarkdownV2(error)}`;
+    await this.sendMessage(text, 'MarkdownV2');
+  }
+
   /** Push payment notification to the chat. */
   async notifyPayment(rail: 'lightning' | 'ark', sats: number, paymentHash: string): Promise<void> {
     const railLabel = rail === 'lightning' ? 'Lightning' : 'Ark OOR';

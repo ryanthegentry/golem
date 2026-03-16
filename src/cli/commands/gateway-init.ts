@@ -21,6 +21,8 @@ export const gatewayInitCommand = new Command('init')
   .option('--price <sats>', 'Price per request in sats', '10')
   .option('--public-url <url>', 'Public URL for 402index registration')
   .option('--service-name <name>', 'Service name for 402index listing')
+  .option('--sweep-address <address>', 'Lightning Address for auto-sweep (e.g., you@wallet.com)')
+  .option('--sweep-threshold <sats>', 'Sweep when balance exceeds this (sats)', '100000')
   .action(async (opts) => {
     if (gatewayConfigExists() && !opts.force) {
       exitWithError(`Gateway config already exists at ${getGatewayConfigPath()}. Use --force to overwrite.`);
@@ -72,6 +74,15 @@ export const gatewayInitCommand = new Command('init')
       cacheMaxSize: 10000,
       ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
       ...(opts.serviceName ? { serviceName: opts.serviceName } : {}),
+      ...(opts.sweepAddress ? {
+        sweep: {
+          enabled: true,
+          address: opts.sweepAddress,
+          threshold: parseInt(opts.sweepThreshold, 10) || 100_000,
+          keep: 10_000,
+          minSweep: 5_000,
+        },
+      } : {}),
     };
 
     saveGatewayConfig(config);
@@ -86,6 +97,9 @@ export const gatewayInitCommand = new Command('init')
     }
     console.log(`  Port:       ${config.port}`);
     console.log(`  Cache:      enabled (${config.cachePricePercent}% price, ${config.cacheDefaultTtl}s TTL, max ${config.cacheMaxSize} entries)`);
+    if (config.sweep?.enabled) {
+      console.log(`  Sweep:      ${config.sweep.address} at ${config.sweep.threshold.toLocaleString()} sats`);
+    }
     console.log('');
     console.log('  Note: Streaming responses (text/event-stream) are NOT cached.');
     console.log('  For Ollama, use "stream": false in request body for cache hits.');

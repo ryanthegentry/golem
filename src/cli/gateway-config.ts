@@ -35,6 +35,18 @@ export interface GatewayConfig {
   cachePricePercent?: number;
   /** Max cached entries before FIFO eviction. Default: 10000. */
   cacheMaxSize?: number;
+  /** Auto-sweep config: sweep excess balance to Lightning. */
+  sweep?: {
+    enabled: boolean;
+    /** Lightning Address, LNURL-pay URL, or bolt11 invoice. */
+    address: string;
+    /** Trigger sweep when available balance exceeds this (sats). */
+    threshold: number;
+    /** Sats to keep in wallet after sweep. Default: 10000. */
+    keep?: number;
+    /** Don't sweep if amount would be less than this (sats). Default: 5000. */
+    minSweep?: number;
+  };
 }
 
 interface GatewayYaml {

@@ -19,6 +19,8 @@ import { TelegramBot } from '../../telegram/bot.js';
 import { loadGatewayConfig, type GatewayConfig } from '../gateway-config.js';
 import { gatewayInitCommand } from './gateway-init.js';
 import { registerWithIndex } from '../../registry/register.js';
+import { AutoSweep } from '../../sweep/auto-sweep.js';
+import { detectAddressType } from '../../sweep/address-resolver.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -147,6 +149,31 @@ export const gatewayCommand = new Command('gateway')
       bot.start();
     }
 
+    // Start AutoSweep if configured
+    let autoSweep: AutoSweep | null = null;
+    if (yamlConfig?.sweep?.enabled && yamlConfig.sweep.address) {
+      try {
+        detectAddressType(yamlConfig.sweep.address);
+        autoSweep = new AutoSweep(
+          wallet,
+          lightning,
+          {
+            enabled: true,
+            address: yamlConfig.sweep.address,
+            threshold: yamlConfig.sweep.threshold,
+            keep: yamlConfig.sweep.keep ?? 10_000,
+            minSweep: yamlConfig.sweep.minSweep ?? 5_000,
+          },
+          undefined,
+          (amount, dest) => void bot?.notifySweep(amount, dest),
+          (error) => void bot?.notifySweepError(error),
+        );
+        autoSweep.start();
+      } catch (err) {
+        console.warn(`  Sweep:     disabled — invalid address: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     // Build Hono app
     const app = new Hono();
 
@@ -193,6 +220,9 @@ export const gatewayCommand = new Command('gateway')
         console.log(`  Ark OOR:    disabled (--no-ark)`);
       }
       console.log(`  Refresh:    ${agent.isRunning ? 'running' : 'stopped'} (${config.safeHarborAddress ? 'emergency exit enabled' : 'no safe harbor'})`);
+      if (autoSweep) {
+        console.log(`  Sweep:      enabled → ${yamlConfig!.sweep!.address} at ${yamlConfig!.sweep!.threshold.toLocaleString()} sats`);
+      }
       console.log('');
       console.log('Press Ctrl+C to stop.');
 
@@ -243,6 +273,7 @@ export const gatewayCommand = new Command('gateway')
     // SIGTERM handlers to fire before SIGKILL (Railway default is 0 seconds).
     for (const signal of ['SIGTERM', 'SIGINT'] as const) {
       process.on(signal, () => {
+        autoSweep?.stop();
         bot?.stop();
         agent.stop();
         wallet.dispose();  // Zero signer key material
