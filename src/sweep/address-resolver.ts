@@ -1,6 +1,44 @@
 import { bech32 } from '@scure/base';
 import type { SweepAddressType, ResolvedInvoice, LnurlPayResponse, LnurlCallbackResponse } from './types.js';
 
+/** Private IP ranges that LNURL callbacks must not target (SSRF prevention). */
+const PRIVATE_IP_PATTERNS = [
+  /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./, /^169\.254\./, /^0\./,
+];
+
+/**
+ * Validate that a LNURL callback URL is safe to fetch.
+ * Rejects non-HTTPS schemes, private IPs, and non-HTTP protocols.
+ */
+export function validateCallbackUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid callback URL: ${url}`);
+  }
+
+  if (parsed.protocol !== 'https:') {
+    // Allow http only for .onion (Tor) per LNURL spec
+    if (parsed.protocol === 'http:' && parsed.hostname.endsWith('.onion')) {
+      // OK — Tor hidden services use HTTP
+    } else {
+      throw new Error(`Callback URL must use HTTPS (got ${parsed.protocol})`);
+    }
+  }
+
+  // Reject private/loopback IPs
+  const hostname = parsed.hostname;
+  if (hostname === 'localhost' || hostname === '::1') {
+    throw new Error('Callback URL must not target localhost');
+  }
+  for (const pattern of PRIVATE_IP_PATTERNS) {
+    if (pattern.test(hostname)) {
+      throw new Error(`Callback URL must not target private IP: ${hostname}`);
+    }
+  }
+}
+
 /**
  * Detect the address format from a user-provided sweep destination.
  */
@@ -53,7 +91,13 @@ export async function resolveToInvoice(address: string, amountSats: number): Pro
  * the callback, and return the bolt11.
  */
 async function resolveLnurlPayEndpoint(url: string, amountSats: number): Promise<ResolvedInvoice> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  // Total resolution timeout (20s) caps the combined time of both fetches.
+  // Individual 15s per-request timeouts remain as sub-limits.
+  const totalController = new AbortController();
+  const totalTimeout = setTimeout(() => totalController.abort(), 20_000);
+
+  try {
+  const res = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(15_000), totalController.signal]) });
   if (!res.ok) {
     throw new Error(`LNURL-pay endpoint returned HTTP ${res.status}`);
   }
@@ -63,6 +107,9 @@ async function resolveLnurlPayEndpoint(url: string, amountSats: number): Promise
   if (data.tag !== 'payRequest' || !data.callback) {
     throw new Error('Invalid LNURL-pay response: missing tag=payRequest or callback');
   }
+
+  // Validate callback URL before fetching (SSRF prevention)
+  validateCallbackUrl(data.callback);
 
   const amountMillisats = amountSats * 1000;
 
@@ -80,9 +127,11 @@ async function resolveLnurlPayEndpoint(url: string, amountSats: number): Promise
   }
 
   const finalMillisats = finalAmountSats * 1000;
-  const callbackUrl = `${data.callback}?amount=${finalMillisats}`;
+  const cbUrl = new URL(data.callback);
+  cbUrl.searchParams.set('amount', String(finalMillisats));
+  const callbackUrl = cbUrl.toString();
 
-  const cbRes = await fetch(callbackUrl, { signal: AbortSignal.timeout(15_000) });
+  const cbRes = await fetch(callbackUrl, { signal: AbortSignal.any([AbortSignal.timeout(15_000), totalController.signal]) });
   if (!cbRes.ok) {
     throw new Error(`LNURL callback returned HTTP ${cbRes.status}`);
   }
@@ -96,6 +145,9 @@ async function resolveLnurlPayEndpoint(url: string, amountSats: number): Promise
     bolt11: cbData.pr,
     amountSats: finalAmountSats,
   };
+  } finally {
+    clearTimeout(totalTimeout);
+  }
 }
 
 /**

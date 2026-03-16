@@ -20,7 +20,6 @@ import { loadGatewayConfig, type GatewayConfig } from '../gateway-config.js';
 import { gatewayInitCommand } from './gateway-init.js';
 import { registerWithIndex } from '../../registry/register.js';
 import { AutoSweep } from '../../sweep/auto-sweep.js';
-import { detectAddressType } from '../../sweep/address-resolver.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -149,28 +148,29 @@ export const gatewayCommand = new Command('gateway')
       bot.start();
     }
 
-    // Start AutoSweep if configured
+    // Start AutoSweep if configured — validate config at startup (MEDIUM-004)
     let autoSweep: AutoSweep | null = null;
     if (yamlConfig?.sweep?.enabled && yamlConfig.sweep.address) {
-      try {
-        detectAddressType(yamlConfig.sweep.address);
+      const sweepConfig = {
+        enabled: true as const,
+        address: yamlConfig.sweep.address,
+        threshold: yamlConfig.sweep.threshold,
+        keep: yamlConfig.sweep.keep ?? 10_000,
+        minSweep: yamlConfig.sweep.minSweep ?? 5_000,
+      };
+      const configError = AutoSweep.validateConfig(sweepConfig);
+      if (configError) {
+        console.warn(`  Sweep:     disabled — ${configError}`);
+      } else {
         autoSweep = new AutoSweep(
           wallet,
           lightning,
-          {
-            enabled: true,
-            address: yamlConfig.sweep.address,
-            threshold: yamlConfig.sweep.threshold,
-            keep: yamlConfig.sweep.keep ?? 10_000,
-            minSweep: yamlConfig.sweep.minSweep ?? 5_000,
-          },
-          undefined,
+          sweepConfig,
+          (event) => console.log(`  [sweep] ${JSON.stringify(event)}`),
           (amount, dest) => void bot?.notifySweep(amount, dest),
           (error) => void bot?.notifySweepError(error),
         );
         autoSweep.start();
-      } catch (err) {
-        console.warn(`  Sweep:     disabled — invalid address: ${err instanceof Error ? err.message : err}`);
       }
     }
 
@@ -268,18 +268,22 @@ export const gatewayCommand = new Command('gateway')
       throw err;
     });
 
-    // Clean shutdown — zero key material on exit
-    // NOTE: On Railway, set RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10 to allow
-    // SIGTERM handlers to fire before SIGKILL (Railway default is 0 seconds).
+    // Clean shutdown — await in-progress sweep, then zero key material on exit.
+    // NOTE: On Railway, set RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30 to allow
+    // the graceful shutdown sequence to complete before SIGKILL.
     for (const signal of ['SIGTERM', 'SIGINT'] as const) {
       process.on(signal, () => {
-        autoSweep?.stop();
-        bot?.stop();
-        agent.stop();
-        wallet.dispose();  // Zero signer key material
-        gateway.dispose();
-        server.close();
-        process.exit(0);
+        const shutdownTimeout = setTimeout(() => process.exit(1), 28_000);
+        Promise.resolve(autoSweep?.stopGraceful(25_000))
+          .finally(() => {
+            bot?.stop();
+            agent.stop();
+            wallet.dispose();  // Zero signer key material
+            gateway.dispose();
+            server.close();
+            clearTimeout(shutdownTimeout);
+            process.exit(0);
+          });
       });
     }
   });

@@ -32,7 +32,7 @@ export interface LnurlCallbackResponse {
 export type SweepEvent =
   | { type: 'check'; balance: number; threshold: number; timestamp: string }
   | { type: 'sweep_start'; amount: number; destination: string; timestamp: string }
-  | { type: 'sweep_ok'; amount: number; destination: string; preimage: string; timestamp: string }
+  | { type: 'sweep_ok'; amount: number; destination: string; paymentHash: string; timestamp: string }
   | { type: 'sweep_skip'; reason: string; timestamp: string }
   | { type: 'sweep_error'; error: string; timestamp: string }
   | { type: 'stopped'; timestamp: string };

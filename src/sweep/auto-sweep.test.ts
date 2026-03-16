@@ -323,6 +323,51 @@ describe('AutoSweep', () => {
       expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('changed'))).toBe(true);
     });
 
+    it('aborts when re-checked balance can\'t cover the resolved invoice amount (MEDIUM-001)', async () => {
+      // Initial: 150k → sweep 140k → resolve invoice for 140k
+      // Recheck: balance dropped to 120k → capacity = 110k < 140k invoice → abort
+      wallet.getBalance
+        .mockResolvedValueOnce({ available: 150_000 })
+        .mockResolvedValueOnce({ available: 120_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1mock', amountSats: 140_000 });
+
+      const sweep = createSweep();
+      await sweep.checkAndSweep();
+
+      expect(lightning.sendLightningPayment).not.toHaveBeenCalled();
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('exceeds rechecked capacity'))).toBe(true);
+    });
+
+    it('aborts when re-checked sweep amount drops below minSweep (MEDIUM-001)', async () => {
+      // Initial: 150k → sweep 140k → resolve invoice for 140k (clamped by LNURL to 4k)
+      // Recheck: balance dropped to 110k → capacity = 100k, but minSweep is 200k → abort
+      wallet.getBalance
+        .mockResolvedValueOnce({ available: 150_000 })
+        .mockResolvedValueOnce({ available: 110_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc4000n1clamped', amountSats: 4_000 });
+
+      const sweep = createSweep({ minSweep: 200_000 });
+      await sweep.checkAndSweep();
+
+      expect(lightning.sendLightningPayment).not.toHaveBeenCalled();
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('below minimum'))).toBe(true);
+    });
+
+    it('proceeds when re-checked balance is still sufficient (MEDIUM-001)', async () => {
+      // Initial: 150k → sweep 140k
+      // Recheck: 145k → capacity = 135k >= 140k invoice? No, 135k < 140k.
+      // Let me use: recheck 160k → capacity = 150k >= 140k → proceed
+      wallet.getBalance
+        .mockResolvedValueOnce({ available: 150_000 })
+        .mockResolvedValueOnce({ available: 160_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1ok', amountSats: 140_000 });
+
+      const sweep = createSweep();
+      await sweep.checkAndSweep();
+
+      expect(lightning.sendLightningPayment).toHaveBeenCalledWith({ invoice: 'lnbc140000n1ok' });
+    });
+
     it('never crashes — errors are caught and logged', async () => {
       wallet.getBalance.mockRejectedValue(new Error('total crash'));
 
@@ -365,7 +410,8 @@ describe('AutoSweep', () => {
       if (ok?.type === 'sweep_ok') {
         expect(ok.amount).toBe(140_000);
         expect(ok.destination).toBe('marty@tftc.io');
-        expect(ok.preimage).toBe('abc123');
+        expect(ok.paymentHash).toBeDefined();
+        expect(ok.paymentHash).toHaveLength(64); // sha256 hex
       }
     });
 
@@ -411,6 +457,231 @@ describe('AutoSweep', () => {
     it('validateConfig returns error when threshold <= keep', () => {
       const err = AutoSweep.validateConfig({ ...DEFAULT_CONFIG, threshold: 5000, keep: 10000 });
       expect(err).toContain('threshold must be greater than keep');
+    });
+
+    it('validateConfig returns error when threshold is 0', () => {
+      const err = AutoSweep.validateConfig({ ...DEFAULT_CONFIG, threshold: 0 });
+      expect(err).toContain('threshold must be positive');
+    });
+
+    it('validateConfig returns error when minSweep is 0', () => {
+      const err = AutoSweep.validateConfig({ ...DEFAULT_CONFIG, minSweep: 0 });
+      expect(err).toContain('minSweep must be positive');
+    });
+
+    it('validateConfig returns error when address is empty', () => {
+      const err = AutoSweep.validateConfig({ ...DEFAULT_CONFIG, address: '' });
+      expect(err).toContain('address is required');
+    });
+  });
+
+  // ---- Graceful shutdown (CRITICAL-001 + MEDIUM-003) ----
+
+  describe('graceful shutdown', () => {
+    it('stopGraceful() resolves immediately when no sweep in progress', async () => {
+      const sweep = createSweep();
+      sweep.start();
+      await sweep.stopGraceful();
+      expect(sweep.isRunning).toBe(false);
+      expect(events.some(e => e.type === 'stopped')).toBe(true);
+    });
+
+    it('stopGraceful() waits for in-progress sweep before resolving', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1mock', amountSats: 140_000 });
+
+      let resolvePayment!: (value: { preimage: string }) => void;
+      lightning.sendLightningPayment.mockImplementation(
+        () => new Promise(r => { resolvePayment = r; }),
+      );
+
+      const sweep = createSweep();
+      const checkPromise = sweep.checkAndSweep();
+
+      // Flush microtasks so checkAndSweep reaches sendLightningPayment
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lightning.sendLightningPayment).toHaveBeenCalled();
+
+      // Start graceful stop — should NOT resolve yet
+      let stopped = false;
+      const stopPromise = sweep.stopGraceful(5_000).then(() => { stopped = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+
+      // Resolve the payment — stopGraceful should now complete
+      resolvePayment({ preimage: 'abc123' });
+      await vi.advanceTimersByTimeAsync(0);
+      await checkPromise;
+      await stopPromise;
+
+      expect(stopped).toBe(true);
+      expect(events.some(e => e.type === 'sweep_ok')).toBe(true);
+      expect(events.some(e => e.type === 'stopped')).toBe(true);
+    });
+
+    it('stopGraceful() times out if sweep is stuck', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1mock', amountSats: 140_000 });
+
+      // sendLightningPayment never resolves
+      lightning.sendLightningPayment.mockImplementation(() => new Promise(() => {}));
+
+      const sweep = createSweep();
+      void sweep.checkAndSweep();
+
+      // Flush microtasks so checkAndSweep reaches sendLightningPayment
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lightning.sendLightningPayment).toHaveBeenCalled();
+
+      // Start graceful stop with short timeout
+      let stopped = false;
+      const stopPromise = sweep.stopGraceful(1_000).then(() => { stopped = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+
+      // Advance past timeout
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stopPromise;
+
+      expect(stopped).toBe(true);
+      expect(events.some(e => e.type === 'sweep_error' && 'error' in e && e.error.includes('shutdown timeout'))).toBe(true);
+      expect(events.some(e => e.type === 'stopped')).toBe(true);
+    });
+
+    it('no new checkAndSweep cycles fire after stopGraceful()', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 50_000 }); // below threshold
+      const sweep = createSweep();
+      sweep.start(5_000);
+
+      // Initial tick
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wallet.getBalance).toHaveBeenCalledTimes(1);
+
+      // Graceful stop
+      await sweep.stopGraceful();
+
+      // Advance past several intervals — no more calls
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(wallet.getBalance).toHaveBeenCalledTimes(1);
+    });
+
+    it('stop() remains synchronous and backward-compatible', () => {
+      const sweep = createSweep();
+      sweep.start();
+      sweep.stop();
+      expect(sweep.isRunning).toBe(false);
+      expect(events.some(e => e.type === 'stopped')).toBe(true);
+    });
+  });
+
+  // ---- Bolt11 consumed + circuit breaker (HIGH-001) ----
+
+  describe('bolt11 consumed + circuit breaker', () => {
+    it('rejects duplicate bolt11 invoice', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      // Same invoice returned twice
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1same', amountSats: 140_000 });
+
+      const sweep = createSweep();
+      await sweep.checkAndSweep();
+      expect(lightning.sendLightningPayment).toHaveBeenCalledTimes(1);
+
+      // Advance past cooldown
+      vi.advanceTimersByTime(11 * 60 * 1000);
+
+      // Second attempt with same invoice should be rejected
+      await sweep.checkAndSweep();
+      expect(lightning.sendLightningPayment).toHaveBeenCalledTimes(1);
+      expect(events.some(e => e.type === 'sweep_error' && 'error' in e && e.error.includes('duplicate invoice'))).toBe(true);
+    });
+
+    it('disables sweep after successful bolt11 payment (single-use)', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1bolt11', amountSats: 140_000 });
+      mockDetectAddressType.mockReturnValue('bolt11');
+
+      const sweep = createSweep({ address: 'lnbc140000n1bolt11' });
+      await sweep.checkAndSweep();
+      expect(lightning.sendLightningPayment).toHaveBeenCalledTimes(1);
+
+      // Advance past cooldown
+      vi.advanceTimersByTime(11 * 60 * 1000);
+
+      // Next cycle should skip — bolt11 consumed
+      await sweep.checkAndSweep();
+      expect(lightning.sendLightningPayment).toHaveBeenCalledTimes(1);
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('bolt11 invoice already consumed'))).toBe(true);
+    });
+
+    it('circuit breaker activates after 3 consecutive failures', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockRejectedValue(new Error('DNS failure'));
+
+      const sweep = createSweep();
+
+      // 3 consecutive failures
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      expect(onError).toHaveBeenCalledTimes(3);
+
+      // 4th attempt should be blocked by circuit breaker
+      await sweep.checkAndSweep();
+      expect(onError).toHaveBeenCalledTimes(3); // no new error
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('circuit breaker'))).toBe(true);
+    });
+
+    it('circuit breaker skips sweep during backoff period', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockRejectedValue(new Error('fail'));
+
+      const sweep = createSweep();
+
+      // Trigger circuit breaker
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+
+      // Advance 30 minutes (less than 1 hour backoff)
+      vi.advanceTimersByTime(30 * 60 * 1000);
+
+      // Still blocked
+      events.length = 0; // clear for clarity
+      await sweep.checkAndSweep();
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('circuit breaker'))).toBe(true);
+      expect(wallet.getBalance).toHaveBeenCalledTimes(3); // no new balance call
+    });
+
+    it('circuit breaker resets after successful sweep', async () => {
+      wallet.getBalance.mockResolvedValue({ available: 150_000 });
+      mockResolveToInvoice.mockRejectedValue(new Error('fail'));
+
+      const sweep = createSweep();
+
+      // 2 failures (not enough for circuit breaker)
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      expect(onError).toHaveBeenCalledTimes(2);
+
+      // Success resets counter
+      mockResolveToInvoice.mockResolvedValue({ bolt11: 'lnbc140000n1ok', amountSats: 140_000 });
+      await sweep.checkAndSweep();
+      expect(lightning.sendLightningPayment).toHaveBeenCalledTimes(1);
+
+      // Advance past cooldown so next attempts aren't blocked
+      vi.advanceTimersByTime(11 * 60 * 1000);
+
+      // 3 more failures — counter was reset, so need 3 again for circuit breaker
+      mockResolveToInvoice.mockRejectedValue(new Error('fail again'));
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      await sweep.checkAndSweep();
+      expect(onError).toHaveBeenCalledTimes(5); // 2 + 0(success) + 3
+
+      // NOW circuit breaker is active
+      events.length = 0;
+      await sweep.checkAndSweep();
+      expect(events.some(e => e.type === 'sweep_skip' && e.reason.includes('circuit breaker'))).toBe(true);
     });
   });
 });
