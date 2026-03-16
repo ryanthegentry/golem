@@ -9,7 +9,7 @@ git clone <repo-url>
 cd golem
 npm install
 cp .env.example .env        # Edit with your values (optional for testnet)
-npm test                     # 336 tests, ~2s
+npm test                     # 481 tests, ~10s
 
 # Create a wallet on mutinynet (default)
 npm run golem -- init
@@ -34,8 +34,14 @@ Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <b
 - CLI: `golem init`, `golem balance`, `golem gateway`, `golem stats`, `golem pay`, `golem directory search`
 - ServerSigner with AES-256-GCM encryption (scrypt key derivation)
 - Safe harbor emergency exit (cooperative offboard + unilateral fallback)
-- **336 passing tests** across 26 test files, live on mutinynet and mainnet
+- **481 passing tests** across 48 test files, live on mutinynet and mainnet
 - Telegram monitoring bot with real-time L402 payment notifications
+- `golem gateway init` — auto-discovery for Ollama and OpenAI upstreams, writes `golem.yaml`
+- Auto-registration with [402index.io](https://402index.io) on gateway start
+- Response caching with configurable TTL and price discount
+- Live on mainnet (Railway deployment)
+- Post-auth HTTP method validation (`GOLEM_UPSTREAM_METHOD` env var)
+- Macaroon interop fixture for cross-language testing (JS ↔ Go)
 - First third-party transaction: 21,000 sats sent to Ark Labs maintainer via agent-managed wallet
 - Performance: 402 challenge in 139ms, LN payment in ~1s, token verify in 9ms
 - [402index.io](https://402index.io) live with 13K+ L402 endpoints indexed
@@ -130,10 +136,14 @@ Client                    Gateway (port 8402)              Upstream API
 | [docs/architecture-overview.md](docs/architecture-overview.md) | Layered architecture, L402 gateway flows, full test walkthrough |
 | [docs/ark-reference.md](docs/ark-reference.md) | Ark protocol specifics — VTXO lifecycle, rounds, fees, Boltz |
 | [docs/sdk-identity-analysis.md](docs/sdk-identity-analysis.md) | Ark SDK Identity interface analysis |
+| [docs/safe-harbor-design.md](docs/safe-harbor-design.md) | Safe harbor emergency exit design and edge cases |
+| [docs/DESIGN.md](docs/DESIGN.md) | Visual design system and CLI output aesthetic |
+| [docs/l402-target-apis.md](docs/l402-target-apis.md) | Target API verticals for L402 gateway adoption |
+| [research/ARK-RECURSIVE-COVENANT-BRIEF.md](research/ARK-RECURSIVE-COVENANT-BRIEF.md) | Technical discussion with Ark Labs on recursive covenants via introspection opcodes |
 
 ## Tests
 
-26 test files covering:
+48 test files covering:
 
 - **Wallet**: creation, boarding, OOR sends, balance, VTXO expiry tracking
 - **L402 gateway**: macaroon minting/verification, dual-mode 402 challenges, proxy routing, rate limiting
@@ -146,7 +156,7 @@ Client                    Gateway (port 8402)              Upstream API
 - **Directory**: 402index.io API client
 
 ```bash
-npm test              # Run all 336 tests
+npm test              # Run all 481 tests
 npm run test:watch    # Watch mode
 ```
 
@@ -159,6 +169,7 @@ npm run test:watch    # Watch mode
 - [`@scure/btc-signer`](https://github.com/paulmillr/scure-btc-signer) — Transaction construction
 - [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) — Macaroon store for anti-replay
 - [`commander`](https://github.com/tj/commander.js) — CLI framework
+- [`js-yaml`](https://github.com/nodeca/js-yaml) — YAML parsing for `golem.yaml` config
 
 ## License
 
