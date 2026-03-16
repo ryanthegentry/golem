@@ -31,7 +31,7 @@ NEVER in agent memory      Claim daemon (covenant,    Round history
 
 ## Current Phase: Phase 1 PoC
 
-Working testnet wallet with automated refresh, dual-mode L402 gateway, and CLI. Live on mutinynet and mainnet. 481 passing tests.
+Working testnet wallet with automated refresh, dual-mode L402 gateway, and CLI. Live on mutinynet and mainnet. 556 passing tests.
 
 ### What's Built (Phase 2)
 - L402 gateway on mainnet (Railway), dual-mode Lightning + Ark OOR
@@ -41,11 +41,11 @@ Working testnet wallet with automated refresh, dual-mode L402 gateway, and CLI. 
 - Post-auth method validation (GOLEM_UPSTREAM_METHOD)
 - Macaroon interop validated (JS V2 binary ↔ Go V2 binary)
 - Telegram dashboard bot (/status, /txs, /vtxos, /health, /gateway)
+- Auto-sweep to Lightning Address (threshold, keep, minSweep, circuit breaker, graceful shutdown)
+- Provider onboarding guide (docs/PROVIDER-GUIDE.md)
 
 ### Next Priorities
-1. Auto-sweep to Lightning Address at balance threshold
-2. Provider onboarding guide (docs/PROVIDER-GUIDE.md)
-3. Covenant claim daemon (Phase 1.5, gated on Arkade opcodes — testnet April per Ark Labs maintainer)
+1. Covenant claim daemon (Phase 1.5, gated on Arkade opcodes — testnet April per Ark Labs maintainer)
 
 ## Signer Interface
 
