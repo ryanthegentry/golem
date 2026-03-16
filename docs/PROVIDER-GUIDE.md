@@ -42,6 +42,8 @@ Expected output: a JSON response with a `"response"` field containing model outp
 
 Your upstream URL is `http://localhost:11434`.
 
+> **Important:** Ollama's API only accepts POST requests. When you configure your gateway (Step 3), set `probeBody` in your golem.yaml so 402index.io health checks work. Example: `probeBody: '{"model": "llama3.2", "prompt": "test", "stream": false}'`
+
 ### Pattern B: Wrap a Script as an API
 
 Turn any Python or Node.js function into an HTTP endpoint.
@@ -107,7 +109,7 @@ Your upstream URL is `http://localhost:3000`.
 ## Step 1: Install Golem
 
 ```bash
-git clone https://github.com/ArkLabsHQ/golem.git
+git clone https://github.com/ryanthegentry/golem.git
 cd golem
 npm install
 ```
@@ -150,6 +152,22 @@ npm run golem -- init --encrypt --safe-harbor YOUR_BTC_ADDRESS
 Replace `YOUR_BTC_ADDRESS` with any Bitcoin address you control (Cash App, Coinbase, River, hardware wallet). This is your emergency recovery address — if anything goes wrong, funds route here.
 
 You'll be prompted for a password. This encrypts your signing key on disk.
+
+Expected output:
+
+```
+Enter wallet password (min 8 chars): ********
+Confirm password: ********
+
+Wallet initialized successfully!
+  Network:  mainnet
+  Server:   https://...
+  Ark addr: ark1q...
+  Boarding: bc1p...  <-- send BTC here to fund wallet
+  Safe harbor: YOUR_BTC_ADDRESS
+  Config:   ~/.golem/config.json
+  Encrypted: yes
+```
 
 Verify the wallet:
 
@@ -211,6 +229,9 @@ gateway:
   contactEmail: "you@example.com"         # Contact for 402index admin
   autoRegister: true                      # Auto-list on 402index.io when gateway starts
 
+  # RECOMMENDED (for POST-only APIs like Ollama, AI inference, etc.)
+  probeBody: '{"model": "llama3.2", "prompt": "test", "stream": false}'  # JSON body for 402index health checks
+
   # OPTIONAL — paths that don't require payment
   freePaths:
     - /health
@@ -239,6 +260,7 @@ gateway:
 | `price` | Satoshis charged per request. 1 sat ≈ $0.001 at current prices. Start low (10–100 sats). |
 | `publicUrl` | The internet-accessible URL of your **gateway** (not your upstream). 402index.io uses this to verify your endpoint. |
 | `sweep.address` | Where to send earnings. Lightning Address (`you@domain.com`) recommended — reusable and doesn't expire. |
+| `probeBody` | JSON body that 402index.io sends when verifying your endpoint is live. Required if your API only accepts POST requests (e.g., Ollama, inference APIs). Without this, health checks will fail. |
 | `freePaths` | URL paths that bypass payment (e.g., health checks, docs). |
 
 ## Step 4: Test Locally
@@ -472,5 +494,5 @@ Your upstream never sees any of this — it receives normal HTTP requests. The g
 
 ## Getting Help
 
-- **GitHub Issues:** [github.com/ArkLabsHQ/golem/issues](https://github.com/ArkLabsHQ/golem/issues)
+- **GitHub Issues:** [github.com/ryanthegentry/golem/issues](https://github.com/ryanthegentry/golem/issues)
 - **402index.io:** [402index.io](https://402index.io)
