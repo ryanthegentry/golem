@@ -46,6 +46,7 @@ const description = process.env.GOLEM_DESCRIPTION;
 const ttlSeconds = parseInt(process.env.GOLEM_TTL_SECONDS || '300', 10);
 const rateLimitPerMinute = parseInt(process.env.GOLEM_RATE_LIMIT || '30', 10);
 const dataDir = process.env.GOLEM_DATA_DIR || './data-l402';
+const upstreamMethod = process.env.GOLEM_UPSTREAM_METHOD?.toUpperCase() || null;
 
 // Cache config
 const cacheEnabled = process.env.GOLEM_CACHE_ENABLED !== 'false'; // default true
@@ -110,6 +111,7 @@ const gateway = createL402Gateway(lightning, {
   upstreamUrl: cacheEnabled ? upstreamUrl : undefined,
   cachePricePercent,
   cacheDefaultTtl,
+  upstreamMethod,
 });
 
 // --- App ---

@@ -77,6 +77,8 @@ interface GatewayConfig {
   cachePricePercent?: number;
   /** Default TTL for cached responses in seconds. Default: 3600. */
   cacheDefaultTtl?: number;
+  /** Required HTTP method for upstream (e.g. "POST"). Null = any method allowed. */
+  upstreamMethod?: string | null;
 }
 
 interface GatewayStats {
@@ -187,6 +189,7 @@ export function createL402Gateway(
   const cachePricePercent = config.cachePricePercent ?? 20;
   const cacheDefaultTtl = config.cacheDefaultTtl ?? 3600;
   const cacheEnabled = !!(responseCache && upstreamUrl);
+  const upstreamMethod = config.upstreamMethod?.toUpperCase() ?? null;
 
   // Exempt /l402/preimage from rate limiting — consumers poll it every 500ms
   const rateLimiter = new RateLimiter(config.rateLimitPerMinute ?? 30, ['/l402/preimage']);
@@ -398,6 +401,17 @@ export function createL402Gateway(
             try { config.onPayment(rail, effectivePrice, result.paymentHash); } catch { /* never crash on callback */ }
           }
 
+          // --- Post-auth method validation ---
+          // If upstream requires a specific method, reject mismatches with 405.
+          // The L402 token remains valid — don't waste it.
+          if (upstreamMethod && c.req.method.toUpperCase() !== upstreamMethod) {
+            return c.json({
+              error: 'Method Not Allowed',
+              allowed_methods: [upstreamMethod],
+              hint: `This endpoint requires ${upstreamMethod} with a request body. Your L402 token is still valid.`,
+            }, 405);
+          }
+
           // --- Cache-and-resell: serve from cache or proxy-and-cache ---
           if (cacheEnabled && responseCache && upstreamUrl && cacheKey) {
             // Re-check cache — entry may have expired between challenge and payment
@@ -497,6 +511,7 @@ export function createL402Gateway(
         macaroon: existing.macaroonBase64,
         paymentHash: existing.paymentHash,
       };
+      if (upstreamMethod) challengeBody.method = upstreamMethod;
       const challengeHeaders: Record<string, string> = { 'WWW-Authenticate': challenge };
       if (cacheEnabled) {
         challengeHeaders['X-Golem-Cache'] = cacheHit ? 'HIT' : 'MISS';
@@ -573,6 +588,8 @@ export function createL402Gateway(
         macaroon: macaroonBase64,
         paymentHash,
       };
+
+      if (upstreamMethod) responseBody.method = upstreamMethod;
 
       const responseHeaders: Record<string, string> = {
         // WWW-Authenticate stays Lightning-only for backward compat with lnget
