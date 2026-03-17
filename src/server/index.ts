@@ -142,8 +142,9 @@ app.get('/api/transactions', async (c) => {
   }
 });
 
-// Rate limiter for /api/send — max 10 per 60 seconds (defense-in-depth on OOR cap)
+// Rate limiters
 const sendRateLimit = { timestamps: [] as number[], max: 10, windowMs: 60_000 };
+const receiveRateLimit = { timestamps: [] as number[], max: 3, windowMs: 60_000 };
 
 app.post('/api/send', async (c) => {
   // Rate limit check
@@ -173,6 +174,38 @@ app.post('/api/send', async (c) => {
         totalBalance: err.totalBalance,
       }, 400);
     }
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+app.post('/api/receive', async (c) => {
+  if (!lightning) {
+    return c.json({ error: 'Lightning unavailable — swap manager failed to start' }, 503);
+  }
+
+  // Rate limit check
+  const now = Date.now();
+  receiveRateLimit.timestamps = receiveRateLimit.timestamps.filter(t => now - t < receiveRateLimit.windowMs);
+  if (receiveRateLimit.timestamps.length >= receiveRateLimit.max) {
+    return c.json({ error: 'Rate limit exceeded: max 3 receives per minute' }, 429);
+  }
+  receiveRateLimit.timestamps.push(now);
+
+  try {
+    const body = await c.req.json<{ amount: number }>();
+    if (!body.amount || typeof body.amount !== 'number' || !Number.isInteger(body.amount) || body.amount <= 0) {
+      return c.json({ error: 'amount must be a positive integer (sats)' }, 400);
+    }
+
+    const result = await lightning.createLightningInvoice({ amount: body.amount });
+    // Return invoice immediately — SwapManager (enableAutoActions) claims automatically
+    return c.json({
+      invoice: result.invoice,
+      amount: result.amount,
+      swapId: result.pendingSwap.id,
+      expiry: result.expiry,
+    });
+  } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 });
