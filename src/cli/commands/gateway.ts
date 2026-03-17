@@ -32,6 +32,7 @@ export const gatewayCommand = new Command('gateway')
   .option('--free-paths <paths>', 'Comma-separated paths that skip payment', '/health,/stats')
   .option('--no-ark', 'Disable Ark-native OOR payments (Lightning only)')
   .option('--trusted-proxy', 'Trust x-forwarded-for/x-real-ip headers for rate limiting (set when behind a reverse proxy)')
+  .option('--demo', 'Simplified output for demos (hides implementation details)')
   .action(async (opts) => {
     // Load golem.yaml — used for CLI fallback and 402index registration
     const yamlConfig: GatewayConfig | null = loadGatewayConfig();
@@ -215,20 +216,29 @@ export const gatewayCommand = new Command('gateway')
     const server = serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, () => {
       console.log('');
       console.log('');
-      console.log(`  URL:        http://0.0.0.0:${port}`);
-      console.log(`  Upstream:   ${opts.upstream}`);
-      console.log(`  Price:      ${priceSats} sats/request`);
-      console.log(`  Free paths: ${freePaths.join(', ')}`);
-      console.log(`  Network:    ${config.network}`);
-      console.log(`  Lightning:  enabled (Boltz reverse swap, invoice generated per-request)`);
-      if (arkAddress) {
-        console.log(`  Ark OOR:    enabled (${arkAddress})`);
+      if (opts.demo) {
+        console.log(`  URL:        http://0.0.0.0:${port}`);
+        console.log(`  Upstream:   ${opts.upstream}`);
+        console.log(`  Price:      ${priceSats} sats/request`);
+        console.log(`  Free paths: ${freePaths.join(', ')}`);
+        console.log(`  Lightning:  enabled`);
+        console.log(`  Ark OOR:    ${arkAddress ? 'enabled' : 'disabled'}`);
       } else {
-        console.log(`  Ark OOR:    disabled (--no-ark)`);
-      }
-      console.log(`  Refresh:    ${agent.isRunning ? 'running' : 'stopped'} (${config.safeHarborAddress ? 'emergency exit enabled' : 'no safe harbor'})`);
-      if (autoSweep) {
-        console.log(`  Sweep:      enabled → ${yamlConfig!.sweep!.address} at ${yamlConfig!.sweep!.threshold.toLocaleString()} sats`);
+        console.log(`  URL:        http://0.0.0.0:${port}`);
+        console.log(`  Upstream:   ${opts.upstream}`);
+        console.log(`  Price:      ${priceSats} sats/request`);
+        console.log(`  Free paths: ${freePaths.join(', ')}`);
+        console.log(`  Network:    ${config.network}`);
+        console.log(`  Lightning:  enabled (Boltz reverse swap, invoice generated per-request)`);
+        if (arkAddress) {
+          console.log(`  Ark OOR:    enabled (${arkAddress})`);
+        } else {
+          console.log(`  Ark OOR:    disabled (--no-ark)`);
+        }
+        console.log(`  Refresh:    ${agent.isRunning ? 'running' : 'stopped'} (${config.safeHarborAddress ? 'emergency exit enabled' : 'no safe harbor'})`);
+        if (autoSweep) {
+          console.log(`  Sweep:      enabled → ${yamlConfig!.sweep!.address} at ${yamlConfig!.sweep!.threshold.toLocaleString()} sats`);
+        }
       }
       console.log('');
       console.log('Press Ctrl+C to stop.');
