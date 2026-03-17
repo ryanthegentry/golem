@@ -1,6 +1,10 @@
 // EventSource polyfill — MUST be set before any SDK imports
 import '../polyfills.js';
 
+// Long-running daemon — transient upstream errors must not kill the process
+import { installProcessGuard } from '../resilience/process-guard.js';
+const processGuard = installProcessGuard();
+
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -91,6 +95,9 @@ const app = new Hono();
 
 // Security headers on all responses
 app.use('*', secureHeaders());
+
+// Free: health check (no auth required — used by Railway health checks and UptimeRobot)
+app.get('/health', (c) => c.json({ status: 'ok', uptime: process.uptime() }));
 
 // Auth middleware — require GOLEM_API_KEY for ALL /api routes (fail-closed)
 app.use('/api/*', async (c, next) => {
@@ -259,6 +266,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     console.log(`Received ${signal} — zeroing signer key and shutting down`);
     signer.dispose();
+    processGuard.dispose();
     clearInterval(cleanupInterval);
     process.exit(0);
   });
