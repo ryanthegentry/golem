@@ -14,6 +14,10 @@ import { resolveServerSigner } from '../signer/resolve-signer.js';
 import { createLightning } from '../lightning/index.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
+import { installProcessGuard } from '../resilience/process-guard.js';
+
+// Long-running daemon — transient upstream errors must not kill the process
+const processGuard = installProcessGuard();
 
 // --- Config from env ---
 
@@ -190,6 +194,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\nReceived ${signal} — zeroing signer key and shutting down`);
     signer.dispose();
     gateway.dispose();
+    processGuard.dispose();
     if (cachePruneInterval) clearInterval(cachePruneInterval);
     if (responseCache) responseCache.close();
     server.close();

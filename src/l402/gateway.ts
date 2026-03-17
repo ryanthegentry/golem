@@ -269,10 +269,11 @@ export function createL402Gateway(
     return null;
   }
 
-  // Start VTXO listener if Ark is enabled (with retry on failure)
+  // Start VTXO listener if Ark is enabled (with exponential backoff retry)
   let stopVtxoListener: (() => void) | null = null;
   if (arkEnabled && config.wallet) {
     const wallet = config.wallet;
+    const MAX_BACKOFF_MS = 60_000; // 60s ceiling
     const startListener = async (attempt = 1): Promise<void> => {
       try {
         stopVtxoListener = await wallet.notifyIncomingFunds((funds) => {
@@ -284,13 +285,14 @@ export function createL402Gateway(
             }
           }
         });
-      } catch (err) {
-        console.error(`[l402:ark] VTXO listener error (attempt ${attempt}):`, err instanceof Error ? err.message : err);
-        if (attempt < 3) {
-          setTimeout(() => void startListener(attempt + 1), 5000 * attempt);
-        } else {
-          console.error('[l402:ark] VTXO listener failed after 3 attempts — Ark OOR payments disabled');
+        if (attempt > 1) {
+          console.log(`[l402:ark] VTXO listener reconnected after ${attempt} attempts`);
         }
+      } catch (err) {
+        // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
+        const backoffMs = Math.min(5000 * Math.pow(2, attempt - 1), MAX_BACKOFF_MS);
+        console.error(`[l402:ark] VTXO listener error (attempt ${attempt}, retry in ${Math.round(backoffMs / 1000)}s):`, err instanceof Error ? err.message : err);
+        setTimeout(() => void startListener(attempt + 1), backoffMs);
       }
     };
     void startListener();

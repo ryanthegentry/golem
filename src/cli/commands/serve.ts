@@ -18,6 +18,7 @@ import { MacaroonStore } from '../../l402/macaroon-store.js';
 import { createInternalApi } from '../../l402/internal-api.js';
 import { loadAlertConfig } from '../../monitoring/alerts.js';
 import { TelegramBot } from '../../telegram/bot.js';
+import { installProcessGuard } from '../../resilience/process-guard.js';
 
 export const serveCommand = new Command('serve')
   .description('Start the internal L402 API (for 402index integration)')
@@ -26,6 +27,9 @@ export const serveCommand = new Command('serve')
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
     const host = opts.host;
+
+    // Long-running daemon — transient upstream errors must not kill the process
+    const processGuard = installProcessGuard();
 
     const { wallet, config } = await getWallet();
 
@@ -116,6 +120,7 @@ export const serveCommand = new Command('serve')
       clearInterval(cleanupInterval);
       macaroonStore.close();
 
+      processGuard.dispose();
       server.close();
       process.exit(0);
     };

@@ -68,7 +68,7 @@ type RefreshEventHandler = (event: RefreshEvent) => void;
  * due to expired timelocks.
  */
 export class RefreshAgent {
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private readonly emergency: EmergencyState = {
     consecutiveRefreshFailures: 0,
@@ -77,6 +77,10 @@ export class RefreshAgent {
     emergencyExitCompleted: false,
   };
   private readonly blockHeightFetcher: BlockHeightFetcher | null;
+  /** Current backoff multiplier for exponential backoff on consecutive errors. */
+  private backoffMultiplier = 1;
+  private static readonly MAX_BACKOFF_MULTIPLIER = 10; // max 10x poll interval (10 min at 60s base)
+  private static readonly BACKOFF_GROWTH = 2;
 
   constructor(
     private readonly wallet: GolemWallet,
@@ -89,13 +93,13 @@ export class RefreshAgent {
       : null;
   }
 
-  /** Start the polling loop */
+  /** Start the polling loop (uses setTimeout chain for adaptive backoff) */
   start(): void {
     if (this.running) return;
     this.running = true;
-    // Run immediately, then on interval
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), this.config.pollIntervalMs);
+    this.backoffMultiplier = 1;
+    // Run immediately, then schedule next
+    void this.tickAndSchedule();
   }
 
   /** Stop the polling loop */
@@ -103,20 +107,39 @@ export class RefreshAgent {
     if (!this.running) return;
     this.running = false;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     this.emit({ type: 'stopped' });
+  }
+
+  /** Run one tick then schedule the next with adaptive delay. */
+  private async tickAndSchedule(): Promise<void> {
+    if (!this.running) return;
+    const hadError = await this.tick();
+    if (!this.running) return;
+
+    if (hadError) {
+      this.backoffMultiplier = Math.min(
+        this.backoffMultiplier * RefreshAgent.BACKOFF_GROWTH,
+        RefreshAgent.MAX_BACKOFF_MULTIPLIER,
+      );
+    } else {
+      this.backoffMultiplier = 1;
+    }
+
+    const delay = Math.round(this.config.pollIntervalMs * this.backoffMultiplier);
+    this.timer = setTimeout(() => void this.tickAndSchedule(), delay);
   }
 
   get isRunning(): boolean {
     return this.running;
   }
 
-  /** Run a single check-and-refresh cycle (public for testing) */
-  async tick(): Promise<void> {
+  /** Run a single check-and-refresh cycle (public for testing). Returns true if an error occurred. */
+  async tick(): Promise<boolean> {
     // If emergency exit already completed, do nothing
-    if (this.emergency.emergencyExitCompleted) return;
+    if (this.emergency.emergencyExitCompleted) return false;
 
     let refreshed = false;
 
@@ -159,7 +182,7 @@ export class RefreshAgent {
         const shouldExit = this.shouldEmergencyExit(allVtxos, currentBlockHeight);
         if (shouldExit && this.emergency.consecutiveRefreshFailures > 0) {
           await this.attemptEmergencyExit();
-          return;
+          return false;
         }
       }
 
@@ -186,11 +209,11 @@ export class RefreshAgent {
         type: 'refresh_error',
         error: message,
       });
-      return; // Don't attempt consolidation after an error
+      return true; // Error occurred — caller should back off
     }
 
     // Consolidation: only when no refresh happened this tick
-    if (refreshed) return;
+    if (refreshed) return false;
 
     try {
       const consolidation = await this.shouldConsolidate();
@@ -199,7 +222,7 @@ export class RefreshAgent {
           type: 'consolidation_skip',
           reason: 'not needed',
         });
-        return;
+        return false;
       }
 
       const candidates = consolidation.candidates!;
@@ -225,6 +248,8 @@ export class RefreshAgent {
         error: message,
       });
     }
+
+    return false;
   }
 
   /**

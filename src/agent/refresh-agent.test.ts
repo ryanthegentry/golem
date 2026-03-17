@@ -383,4 +383,156 @@ describe('RefreshAgent', () => {
       }
     });
   });
+
+  describe('exponential backoff on errors', () => {
+    it('tick returns true on error, false on success', async () => {
+      const wallet = createMockWallet({
+        getExpiringVtxos: vi.fn().mockRejectedValueOnce(new Error('Too Many Requests')),
+      });
+      const agent = new RefreshAgent(wallet, BASE_CONFIG);
+
+      // First tick — error
+      const hadError = await agent.tick();
+      expect(hadError).toBe(true);
+
+      // Second tick — success (mock returns empty by default after first call)
+      const wallet2 = createMockWallet();
+      const agent2 = new RefreshAgent(wallet2, BASE_CONFIG);
+      const ok = await agent2.tick();
+      expect(ok).toBe(false);
+    });
+
+    it('backs off polling interval after consecutive errors', async () => {
+      let callCount = 0;
+      const wallet = createMockWallet({
+        getExpiringVtxos: vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount <= 3) return Promise.reject(new Error('Too Many Requests'));
+          return Promise.resolve([]);
+        }),
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, { ...BASE_CONFIG, pollIntervalMs: 1000 }, (e) => events.push(e));
+
+      agent.start();
+
+      // First tick runs immediately
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callCount).toBe(1);
+
+      // After error, next tick should be at 2x interval (2000ms)
+      await vi.advanceTimersByTimeAsync(1000); // 1x — too early
+      expect(callCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1000); // 2x — should fire
+      expect(callCount).toBe(2);
+
+      // After second error, next tick at 4x interval (4000ms)
+      await vi.advanceTimersByTimeAsync(3000); // 3s — too early
+      expect(callCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1000); // 4s total — should fire
+      expect(callCount).toBe(3);
+
+      agent.stop();
+    });
+
+    it('resets backoff after successful tick', async () => {
+      let callCount = 0;
+      const wallet = createMockWallet({
+        getExpiringVtxos: vi.fn().mockImplementation(() => {
+          callCount++;
+          // First call fails, rest succeed
+          if (callCount === 1) return Promise.reject(new Error('rate limited'));
+          return Promise.resolve([]);
+        }),
+      });
+      const agent = new RefreshAgent(wallet, { ...BASE_CONFIG, pollIntervalMs: 1000 });
+
+      agent.start();
+
+      // First tick — error
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callCount).toBe(1);
+
+      // Backed-off tick at 2x (2000ms)
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(callCount).toBe(2);
+
+      // After success, next tick should be at 1x (1000ms) — backoff reset
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(callCount).toBe(3);
+
+      agent.stop();
+    });
+
+    it('caps backoff at MAX_BACKOFF_MULTIPLIER (10x)', async () => {
+      let callCount = 0;
+      const wallet = createMockWallet({
+        getExpiringVtxos: vi.fn().mockImplementation(() => {
+          callCount++;
+          return Promise.reject(new Error('permanently broken'));
+        }),
+      });
+      const agent = new RefreshAgent(wallet, { ...BASE_CONFIG, pollIntervalMs: 1000 });
+
+      agent.start();
+
+      // Tick 0: immediate
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callCount).toBe(1);
+
+      // Tick 1: 2x (2s)
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(callCount).toBe(2);
+
+      // Tick 2: 4x (4s)
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(callCount).toBe(3);
+
+      // Tick 3: 8x (8s)
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(callCount).toBe(4);
+
+      // Tick 4: capped at 10x (10s), not 16x
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(callCount).toBe(5);
+
+      // Tick 5: still capped at 10x (10s)
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(callCount).toBe(6);
+
+      agent.stop();
+    });
+
+    it('gateway process survives ASP 429 error storm (integration)', async () => {
+      // Simulate the exact production crash: ASP returns 429 repeatedly
+      let ticks = 0;
+      const wallet = createMockWallet({
+        getExpiringVtxos: vi.fn().mockImplementation(() => {
+          ticks++;
+          return Promise.reject(new Error('Failed to fetch vtxos: Too Many Requests'));
+        }),
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, { ...BASE_CONFIG, pollIntervalMs: 1000 }, (e) => events.push(e));
+
+      agent.start();
+
+      // Run for 30 simulated seconds — agent should NOT crash
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // Agent should still be running
+      expect(agent.isRunning).toBe(true);
+
+      // Should have backed off — NOT 30 ticks (one per second)
+      // With 2x backoff: ticks at 0, 2, 6, 14, 24 = ~5 ticks in 30s
+      expect(ticks).toBeLessThan(10);
+      expect(ticks).toBeGreaterThanOrEqual(4);
+
+      // Every tick should have produced a refresh_error
+      const errors = events.filter(e => e.type === 'refresh_error');
+      expect(errors.length).toBe(ticks);
+
+      agent.stop();
+    });
+  });
 });

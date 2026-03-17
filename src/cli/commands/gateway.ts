@@ -20,6 +20,7 @@ import { loadGatewayConfig, type GatewayConfig } from '../gateway-config.js';
 import { gatewayInitCommand } from './gateway-init.js';
 import { registerWithIndex } from '../../registry/register.js';
 import { AutoSweep } from '../../sweep/auto-sweep.js';
+import { installProcessGuard } from '../../resilience/process-guard.js';
 
 export const gatewayCommand = new Command('gateway')
   .description('Start a dual-mode L402 reverse proxy (Lightning + Ark OOR)')
@@ -94,6 +95,12 @@ export const gatewayCommand = new Command('gateway')
       }
       throw err;  // Re-throw exitWithError calls
     }
+
+    // Install process-level guards — transient upstream errors (ASP 429, EventSource
+    // drops, Boltz 404s) must never kill a long-running gateway. The CLI's default
+    // handlers call process.exit(1) on any unhandled rejection, which is correct for
+    // short-lived commands but fatal for daemons.
+    const processGuard = installProcessGuard();
 
     const { wallet, config } = await getWallet();
     const netConfig = getNetworkConfig(config.network);
@@ -280,6 +287,7 @@ export const gatewayCommand = new Command('gateway')
             agent.stop();
             wallet.dispose();  // Zero signer key material
             gateway.dispose();
+            processGuard.dispose();
             server.close();
             clearTimeout(shutdownTimeout);
             process.exit(0);
