@@ -75,8 +75,8 @@ export async function registerWithIndex(params: RegistrationParams): Promise<Reg
 
     if (response.status === 422) {
       try {
-        const data = await response.json() as { error: string };
-        return { status: 'probe_failed', error: data.error };
+        const data = await response.json() as { error: string; detail?: string };
+        return { status: 'probe_failed', error: data.detail || data.error };
       } catch {
         return { status: 'probe_failed', error: 'L402 verification failed (response unparseable)' };
       }

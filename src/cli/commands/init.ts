@@ -28,7 +28,18 @@ export const initCommand = new Command('init')
   .option('--encrypt', 'Encrypt private key with a password (default on mainnet)')
   .option('--no-encrypt', 'Store private key unencrypted (default on testnet/mutinynet)')
   .option('--pubkey <hex>', 'Initialize receive-only wallet with a compressed public key (66 hex chars)')
+  .option('--demo', 'Demo mode: reads GOLEM_SAFE_HARBOR from env, auto-encrypts, minimal output')
   .action(async (opts) => {
+    // --demo: pull safe-harbor from env if not on CLI, force encrypt
+    if (opts.demo) {
+      if (!opts.safeHarbor && process.env.GOLEM_SAFE_HARBOR) {
+        opts.safeHarbor = process.env.GOLEM_SAFE_HARBOR;
+      }
+      // Demo always encrypts (password from GOLEM_PASSWORD env var)
+      opts.encrypt = true;
+      opts.force = true;
+    }
+
     // GOLEM_NETWORK env var takes precedence over --network flag
     // (Commander's default for --network is 'mutinynet', which would shadow the env var)
     const networkName = (process.env.GOLEM_NETWORK || opts.network) as GolemNetwork;
@@ -198,28 +209,38 @@ export const initCommand = new Command('init')
     saveConfig(config);
 
     console.log('');
-    console.log('Wallet initialized successfully!');
-    console.log('');
-    console.log(`  Network:  ${networkName}`);
-    console.log(`  Server:   ${arkServer}`);
-    console.log(`  Ark addr: ${walletAddress}`);
-    console.log(`  Boarding: ${boardingAddress}  <-- send BTC here to fund wallet`);
-    if (safeHarborAddress) {
-      console.log(`  Safe harbor: ${safeHarborAddress}`);
-    }
-    console.log(`  Config:   ${getConfigPath()}`);
-    console.log(`  Encrypted: ${shouldEncrypt ? 'yes' : 'no'}`);
-
-    if (!shouldEncrypt) {
+    if (opts.demo) {
+      console.log('Wallet initialized. Encrypted. Ready.');
       console.log('');
-      console.log('WARNING: Private key stored unencrypted. Do NOT use with real funds.');
-      console.log('         Use --encrypt to protect with a password.');
-    }
-
-    if (!safeHarborAddress) {
+      console.log(`  Network:    ${networkName}`);
+      console.log(`  Encrypted:  yes`);
+      if (safeHarborAddress) {
+        console.log(`  Safe harbor: set`);
+      }
+    } else {
+      console.log('Wallet initialized successfully!');
       console.log('');
-      console.log('WARNING: No safe harbor address set. Run `golem safe-harbor --set <address>`');
-      console.log('         before depositing significant funds.');
+      console.log(`  Network:  ${networkName}`);
+      console.log(`  Server:   ${arkServer}`);
+      console.log(`  Ark addr: ${walletAddress}`);
+      console.log(`  Boarding: ${boardingAddress}  <-- send BTC here to fund wallet`);
+      if (safeHarborAddress) {
+        console.log(`  Safe harbor: ${safeHarborAddress}`);
+      }
+      console.log(`  Config:   ${getConfigPath()}`);
+      console.log(`  Encrypted: ${shouldEncrypt ? 'yes' : 'no'}`);
+
+      if (!shouldEncrypt) {
+        console.log('');
+        console.log('WARNING: Private key stored unencrypted. Do NOT use with real funds.');
+        console.log('         Use --encrypt to protect with a password.');
+      }
+
+      if (!safeHarborAddress) {
+        console.log('');
+        console.log('WARNING: No safe harbor address set. Run `golem safe-harbor --set <address>`');
+        console.log('         before depositing significant funds.');
+      }
     }
 
     console.log('');

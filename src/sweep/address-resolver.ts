@@ -154,7 +154,7 @@ async function resolveLnurlPayEndpoint(url: string, amountSats: number): Promise
  * Decode a bech32-encoded LNURL (lnurl1...) to a plain URL string.
  */
 function decodeLnurlBech32(lnurl: string): string {
-  const decoded = bech32.decode(lnurl, 2000);
+  const decoded = bech32.decode(lnurl as `${string}1${string}`, 2000);
   const bytes = bech32.fromWords(decoded.words);
   return new TextDecoder().decode(new Uint8Array(bytes));
 }

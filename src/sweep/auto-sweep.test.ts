@@ -74,8 +74,8 @@ describe('AutoSweep', () => {
       lightning as any,
       { ...DEFAULT_CONFIG, ...configOverrides },
       (e) => events.push(e),
-      onSweep,
-      onError,
+      onSweep as any,
+      onError as any,
     );
   }
 

@@ -7,7 +7,7 @@ import '../polyfills.js';
 import * as dotenv from 'dotenv';
 import * as os from 'node:os';
 import * as path from 'node:path';
-dotenv.config({ path: path.join(os.homedir(), '.golem', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.golem', '.env'), quiet: true });
 
 // Global error handlers — clean output instead of stack traces
 process.on('uncaughtException', (err) => {
