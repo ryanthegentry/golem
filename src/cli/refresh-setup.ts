@@ -21,18 +21,25 @@ interface RefreshSetup {
   eventLog: EventLog<RefreshEvent>;
 }
 
+interface RefreshSetupOptions {
+  demo?: boolean;
+}
+
 /**
  * Create and start a RefreshAgent with logging and optional Telegram alerts.
  *
  * @param wallet - The GolemWallet to monitor
  * @param config - CLI config (for safe harbor address + exit threshold)
  * @param gateway - Optional gateway reference for emergency exit shutdown
+ * @param options - Optional settings (demo: suppress non-critical noise)
  */
 export function startRefreshAgent(
   wallet: GolemWallet,
   config: GolemConfig,
   gateway?: { shutdown(): void },
+  options?: RefreshSetupOptions,
 ): RefreshSetup {
+  const demo = options?.demo ?? false;
   const alertConfig = loadAlertConfig();
   const alertManager = new AlertManager(alertConfig);
   const eventLog = new EventLog<RefreshEvent>();
@@ -46,9 +53,9 @@ export function startRefreshAgent(
   };
 
   const agent = new RefreshAgent(wallet, refreshConfig, (event: RefreshEvent) => {
-    logRefreshEvent(event);
+    logRefreshEvent(event, demo);
     eventLog.push(event);
-    void handleAlerts(event, alertManager);
+    void handleAlerts(event, alertManager, demo);
   }, gateway);
 
   agent.start();
@@ -56,11 +63,13 @@ export function startRefreshAgent(
   return { agent, alertManager, eventLog };
 }
 
-function logRefreshEvent(event: RefreshEvent): void {
+function logRefreshEvent(event: RefreshEvent, demo = false): void {
   if (event.type === 'refresh_error') {
-    console.error(`Refresh error: ${event.error}`);
+    // In demo mode, suppress transient Ark errors (e.g. "Error renewing VTXOs")
+    // that distract from the payment flow. Emergency exits always surface.
+    if (!demo) console.error(`Refresh error: ${event.error}`);
   } else if (event.type === 'consolidation_error') {
-    console.error(`Consolidation error: ${event.error}`);
+    if (!demo) console.error(`Consolidation error: ${event.error}`);
   } else if (event.type === 'emergency_exit_triggered') {
     console.error(`EMERGENCY EXIT: ${event.reason}`);
   } else if (event.type === 'emergency_exit_failed') {
@@ -71,10 +80,12 @@ function logRefreshEvent(event: RefreshEvent): void {
 async function handleAlerts(
   event: RefreshEvent,
   alertManager: AlertManager,
+  demo = false,
 ): Promise<void> {
   try {
     if (event.type === 'refresh_error') {
-      await alertManager.alert('refresh_error', `Refresh failed: ${event.error}`, 'WARNING');
+      // Demo: suppress WARNING-level noise; only surface via Telegram if configured
+      if (!demo) await alertManager.alert('refresh_error', `Refresh failed: ${event.error}`, 'WARNING');
     }
 
     if (event.type === 'emergency_exit_triggered') {
@@ -86,7 +97,7 @@ async function handleAlerts(
     }
 
     if (event.type === 'reserve_low') {
-      await alertManager.alert(
+      if (!demo) await alertManager.alert(
         'reserve_low',
         `On-chain reserve low: ${event.actual} sats, need ${event.required} sats for ${event.vtxoCount} VTXOs`,
         'WARNING',
@@ -103,18 +114,23 @@ async function handleAlerts(
           72 * 3600, // WARNING at 72h
         );
         if (expiryAlert) {
-          await alertManager.alert('vtxo_expiry', expiryAlert.message, expiryAlert.level);
+          // Demo: suppress WARNING-level expiry noise
+          if (!demo || expiryAlert.level === 'CRITICAL') {
+            await alertManager.alert('vtxo_expiry', expiryAlert.message, expiryAlert.level);
+          }
         }
       }
 
       // Balance alerts — use totalBalanceSats from event payload
-      const highAlert = checkBalance(event.totalBalanceSats, 'high');
-      if (highAlert) {
-        await alertManager.alert('balance_high', highAlert.message, highAlert.level);
-      }
-      const lowAlert = checkBalance(event.totalBalanceSats, 'low');
-      if (lowAlert) {
-        await alertManager.alert('balance_low', lowAlert.message, lowAlert.level);
+      if (!demo) {
+        const highAlert = checkBalance(event.totalBalanceSats, 'high');
+        if (highAlert) {
+          await alertManager.alert('balance_high', highAlert.message, highAlert.level);
+        }
+        const lowAlert = checkBalance(event.totalBalanceSats, 'low');
+        if (lowAlert) {
+          await alertManager.alert('balance_low', lowAlert.message, lowAlert.level);
+        }
       }
     }
 

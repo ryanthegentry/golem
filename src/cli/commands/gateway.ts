@@ -110,7 +110,7 @@ export const gatewayCommand = new Command('gateway')
     // Start RefreshAgent for VTXO protection
     // Pass gateway shutdown handle so emergency exit can stop accepting payments
     const gatewayHandle = { shutdown: () => { /* set below after gateway creation */ } };
-    const { agent, alertManager, eventLog } = startRefreshAgent(wallet, config, gatewayHandle);
+    const { agent, alertManager, eventLog } = startRefreshAgent(wallet, config, gatewayHandle, { demo: !!opts.demo });
 
     // Get Ark address for OOR payments
     let arkAddress: string | undefined;
@@ -222,7 +222,6 @@ export const gatewayCommand = new Command('gateway')
         console.log(`  Price:      ${priceSats} sats/request`);
         console.log(`  Free paths: ${freePaths.join(', ')}`);
         console.log(`  Lightning:  enabled`);
-        console.log(`  Ark OOR:    ${arkAddress ? 'enabled' : 'disabled'}`);
       } else {
         console.log(`  URL:        http://0.0.0.0:${port}`);
         console.log(`  Upstream:   ${opts.upstream}`);
@@ -256,8 +255,11 @@ export const gatewayCommand = new Command('gateway')
           probeBody: yamlConfig.probeBody,
         }).then((result) => {
           switch (result.status) {
+            case 'active':
+              console.log(`  402index:   registered and live ✓`);
+              break;
             case 'pending':
-              console.log(`  402index:   registered (id: ${result.id})`);
+              console.log(`  402index:   registered, pending review (id: ${result.id})`);
               break;
             case 'already_registered':
               console.log('  402index:   already registered');

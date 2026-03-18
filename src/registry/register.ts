@@ -16,7 +16,7 @@ export interface RegistrationParams {
   probeBody?: string;
 }
 
-export type RegistrationStatus = 'pending' | 'already_registered' | 'probe_failed' | 'failed' | 'skipped';
+export type RegistrationStatus = 'pending' | 'active' | 'already_registered' | 'probe_failed' | 'failed' | 'skipped';
 
 export interface RegistrationResult {
   status: RegistrationStatus;
@@ -38,6 +38,9 @@ export async function registerWithIndex(params: RegistrationParams): Promise<Reg
     provider: 'golem-gateway',
     category: params.category ?? 'ai/inference',
     http_method: 'POST',
+    price_sats: params.priceSats,
+    payment_asset: 'BTC',
+    payment_network: 'Lightning',
     contact_email: params.contactEmail,
     probe_body: params.probeBody,
   };
@@ -56,8 +59,11 @@ export async function registerWithIndex(params: RegistrationParams): Promise<Reg
 
     if (response.status === 201) {
       try {
-        const data = await response.json() as { id: string; status: string };
-        return { status: 'pending', id: data.id };
+        const data = await response.json() as { service?: { id: string; status: string }; message?: string };
+        const id = data.service?.id;
+        // 'active' = auto-approved (just registered and live); 'pending' = awaiting manual review
+        const registrationStatus = data.service?.status === 'active' ? 'active' : 'pending';
+        return { status: registrationStatus, id };
       } catch {
         return { status: 'pending' };  // Registered but couldn't parse response
       }
