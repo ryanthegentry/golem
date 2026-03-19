@@ -12,6 +12,33 @@ export type { GolemLightningConfig } from './config.js';
 export { lightningConfigFromNetwork } from './config.js';
 export { ArkadeSwaps } from '@arkade-os/boltz-swap';
 
+/** Terminal Boltz swap statuses — these swaps will never change state again. */
+const TERMINAL_STATUSES = [
+  'transaction.claimed',
+  'transaction.refunded',
+  'swap.expired',
+  'invoice.expired',
+];
+
+const CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Delete terminal-state swaps older than 7 days from the swap DB.
+ * Prevents SwapManager from polling Boltz for purged swaps (which return 404).
+ * Returns the number of deleted rows.
+ */
+export function cleanupTerminalSwaps(db: import('better-sqlite3').Database): number {
+  const cutoff = Date.now() - CLEANUP_AGE_MS;
+  const placeholders = TERMINAL_STATUSES.map(() => '?').join(', ');
+  const result = db.prepare(
+    `DELETE FROM boltz_swaps WHERE status IN (${placeholders}) AND created_at < ?`,
+  ).run(...TERMINAL_STATUSES, cutoff);
+  if (result.changes > 0) {
+    console.log(`[lightning] Cleaned up ${result.changes} terminal swap(s) older than 7 days`);
+  }
+  return result.changes;
+}
+
 /**
  * Create and start an ArkadeSwaps instance from an SDK wallet and network config.
  *
@@ -43,6 +70,16 @@ export async function createLightning(
     const db = new Database(path.join(dataDir, 'boltz-swaps.db'));
     db.pragma('journal_mode = DELETE');
     swapRepository = new SQLiteSwapRepository(createSQLExecutor(db));
+
+    // Clean up stale terminal swaps before starting the manager.
+    // Boltz purges completed/expired swaps after some TTL. Polling purged swaps
+    // generates 404s that feed the circuit breaker and flood logs.
+    try {
+      cleanupTerminalSwaps(db);
+    } catch (err) {
+      // Non-fatal — table may not exist yet on first run
+      console.warn('[lightning] Swap cleanup skipped:', err instanceof Error ? err.message : err);
+    }
   }
 
   const lightning = new ArkadeSwaps({

@@ -23,6 +23,7 @@ import { createInternalApi } from '../l402/internal-api.js';
 import { FileRootKeyStore } from '../l402/macaroon.js';
 import { MacaroonStore } from '../l402/macaroon-store.js';
 import { createLightning } from '../lightning/index.js';
+import { initWalletWithRetry } from './init-retry.js';
 
 // --- Startup ---
 
@@ -37,7 +38,12 @@ const signer = await resolveServerSigner().catch((err) => {
 
 const netConfig = getNetworkConfig();
 const walletConfig = walletConfigFromNetwork(netConfig, './data');
-const wallet = await GolemWallet.create(signer, walletConfig);
+const wallet = await initWalletWithRetry(
+  () => GolemWallet.create(signer, walletConfig),
+).catch((err) => {
+  console.error(`Wallet init failed after retries: ${(err as Error).message}`);
+  process.exit(1);
+});
 
 const eventLog = new EventLog<RefreshEvent>(100);
 const sseClients = new Set<(event: RefreshEvent) => void>();

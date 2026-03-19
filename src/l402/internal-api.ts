@@ -24,6 +24,7 @@ import type { AlertManager } from '../monitoring/alerts.js';
 import { getNearestExpiryMs, toExpiryInput } from '../agent/expiry.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
+import { BOLTZ_MINIMUM_SATS } from './gateway.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -81,6 +82,9 @@ export function createInternalApi(config: InternalApiConfig): Hono {
 
       if (isNaN(priceSats) || priceSats <= 0) {
         return c.json({ error: 'Invalid price_sats' }, 400);
+      }
+      if (priceSats < BOLTZ_MINIMUM_SATS) {
+        return c.json({ error: `price_sats must be >= ${BOLTZ_MINIMUM_SATS} (Boltz minimum)` }, 400);
       }
       if (isNaN(durationHours) || durationHours <= 0) {
         return c.json({ error: 'Invalid duration_hours' }, 400);

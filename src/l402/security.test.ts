@@ -865,7 +865,7 @@ describe('L402 Security — macaroon-v2', () => {
       const { lightning } = mockLightningForCache();
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -888,8 +888,8 @@ describe('L402 Security — macaroon-v2', () => {
       const result = c._getResponse();
 
       expect(result.status).toBe(402);
-      expect(result.body.price).toBe(20); // 20% of 100
-      expect(result.body.fullPrice).toBe(100);
+      expect(result.body.price).toBe(100); // 20% of 500
+      expect(result.body.fullPrice).toBe(500);
       expect(result.headers['X-Golem-Cache']).toBe('HIT');
 
       gateway.dispose();
@@ -901,7 +901,7 @@ describe('L402 Security — macaroon-v2', () => {
       const { lightning } = mockLightningForCache();
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -912,7 +912,7 @@ describe('L402 Security — macaroon-v2', () => {
       const result = c._getResponse();
 
       expect(result.status).toBe(402);
-      expect(result.body.price).toBe(100); // full price
+      expect(result.body.price).toBe(500); // full price
       expect(result.body.fullPrice).toBeUndefined();
       expect(result.headers['X-Golem-Cache']).toBe('MISS');
 
@@ -925,7 +925,7 @@ describe('L402 Security — macaroon-v2', () => {
       const { lightning } = mockLightningForCache();
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -964,7 +964,7 @@ describe('L402 Security — macaroon-v2', () => {
 
       // Stats
       expect(gateway.getStats().cacheHits).toBe(1);
-      expect(gateway.getStats().cacheSatsEarned).toBe(20);
+      expect(gateway.getStats().cacheSatsEarned).toBe(100); // 20% of 500
 
       gateway.dispose();
       cache.close();
@@ -984,7 +984,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', mockFetch);
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -1034,7 +1034,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', mockFetch);
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cacheDefaultTtl: 3600,
@@ -1072,7 +1072,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', mockFetch);
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cacheDefaultTtl: 3600,
@@ -1094,15 +1094,15 @@ describe('L402 Security — macaroon-v2', () => {
       cache.close();
     });
 
-    it('cache price minimum is 1 sat (never free)', async () => {
+    it('cache price shows true discount even when below Boltz minimum', async () => {
       const cache = new ResponseCache(path.join(tmpDir, 'c.db'));
       const { lightning } = mockLightningForCache();
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 1, // 20% of 1 = 0.2, should round up to 1
+        priceSats: 500, // 1% of 500 = 5
         cache,
         upstreamUrl: 'http://localhost:11434',
-        cachePricePercent: 20,
+        cachePricePercent: 1,
         cacheDefaultTtl: 3600,
       });
 
@@ -1121,7 +1121,10 @@ describe('L402 Security — macaroon-v2', () => {
       await gateway.middleware(c as any, vi.fn());
       const result = c._getResponse();
 
-      expect(result.body.price).toBe(1); // minimum 1, not 0
+      // User sees the true cache-discounted price (5 sats)
+      expect(result.body.price).toBe(5);
+      // But Boltz invoice is created at the minimum
+      expect(lightning.createLightningInvoice).toHaveBeenCalledWith({ amount: 333 });
 
       gateway.dispose();
       cache.close();
@@ -1132,7 +1135,7 @@ describe('L402 Security — macaroon-v2', () => {
       const { lightning } = mockLightningForCache();
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         freePaths: ['/health'],
@@ -1157,7 +1160,7 @@ describe('L402 Security — macaroon-v2', () => {
 
       // No cache config at all
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
       });
 
       const c = makeContextWithBody('/api/data', 'GET');
@@ -1165,7 +1168,7 @@ describe('L402 Security — macaroon-v2', () => {
       const result = c._getResponse();
 
       expect(result.status).toBe(402);
-      expect(result.body.price).toBe(100);
+      expect(result.body.price).toBe(500);
       expect(result.headers['X-Golem-Cache']).toBeUndefined();
 
       gateway.dispose();
@@ -1186,7 +1189,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', mockFetch);
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -1204,10 +1207,10 @@ describe('L402 Security — macaroon-v2', () => {
         responseBody: Buffer.from('{"response":"old-cached"}'),
       }, 2);
 
-      // Issue 402 — should be at cache price
+      // Issue 402 — user sees the true cache-discounted price
       const challengeCtx = makeContextWithBody('/api/generate', 'POST', {}, '{"prompt":"hi"}');
       await gateway.middleware(challengeCtx as any, vi.fn());
-      expect(challengeCtx._getResponse().body.price).toBe(20);
+      expect(challengeCtx._getResponse().body.price).toBe(100); // 20% of 500
 
       // Advance time past cache TTL
       vi.advanceTimersByTime(3000);
@@ -1243,7 +1246,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', mockFetch);
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cachePricePercent: 20,
@@ -1269,7 +1272,7 @@ describe('L402 Security — macaroon-v2', () => {
       const s = gateway.getStats();
       expect(s.cacheMisses).toBe(1);
       expect(s.cacheHits).toBe(1);
-      expect(s.cacheSatsEarned).toBe(20); // only cache hit earns cache sats
+      expect(s.cacheSatsEarned).toBe(100); // 20% of 500
 
       gateway.dispose();
       cache.close();
@@ -1283,7 +1286,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(err));
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cacheDefaultTtl: 3600,
@@ -1310,7 +1313,7 @@ describe('L402 Security — macaroon-v2', () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
 
       const gateway = createL402Gateway(lightning, {
-        priceSats: 100,
+        priceSats: 500,
         cache,
         upstreamUrl: 'http://localhost:11434',
         cacheDefaultTtl: 3600,
@@ -1364,7 +1367,7 @@ describe('L402 Security — macaroon-v2', () => {
         dispose: vi.fn(),
       } as any;
 
-      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const gateway = createL402Gateway(lightning, { priceSats: 500 });
       const c = makeContext('/api/data');
       await gateway.middleware(c as any, vi.fn());
 
@@ -1385,7 +1388,7 @@ describe('L402 Security — macaroon-v2', () => {
         dispose: vi.fn(),
       } as any;
 
-      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const gateway = createL402Gateway(lightning, { priceSats: 500 });
       const c = makeContext('/api/data');
       await gateway.middleware(c as any, vi.fn());
 
@@ -1403,7 +1406,7 @@ describe('L402 Security — macaroon-v2', () => {
         dispose: vi.fn(),
       } as any;
 
-      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const gateway = createL402Gateway(lightning, { priceSats: 500 });
       const cb = gateway._testInternals().boltzCircuitBreaker;
 
       // Simulate 5 consecutive failures (each request records one after retries exhaust)
@@ -1428,7 +1431,7 @@ describe('L402 Security — macaroon-v2', () => {
         dispose: vi.fn(),
       } as any;
 
-      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const gateway = createL402Gateway(lightning, { priceSats: 500 });
 
       // Directly trip the circuit breaker
       const cb = gateway._testInternals().boltzCircuitBreaker;
@@ -1454,7 +1457,7 @@ describe('L402 Security — macaroon-v2', () => {
         dispose: vi.fn(),
       } as any;
 
-      const gateway = createL402Gateway(lightning, { priceSats: 100 });
+      const gateway = createL402Gateway(lightning, { priceSats: 500 });
       const cb = gateway._testInternals().boltzCircuitBreaker;
 
       // Trip the circuit breaker

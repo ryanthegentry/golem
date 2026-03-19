@@ -15,6 +15,7 @@ import { createLightning } from '../lightning/index.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 import { installProcessGuard } from '../resilience/process-guard.js';
+import { initWalletWithRetry } from '../server/init-retry.js';
 
 // Long-running daemon — transient upstream errors must not kill the process
 const processGuard = installProcessGuard();
@@ -43,7 +44,7 @@ try {
   process.exit(1);
 }
 
-const priceSats = parseInt(process.env.GOLEM_PRICE_SATS || '1', 10);
+const priceSats = parseInt(process.env.GOLEM_PRICE_SATS || '500', 10);
 const port = parseInt(process.env.GOLEM_PORT || '8402', 10);
 const freePaths = (process.env.GOLEM_FREE_PATHS || '/health,/docs').split(',').map(p => p.trim());
 const description = process.env.GOLEM_DESCRIPTION;
@@ -71,9 +72,19 @@ const signer = await resolveServerSigner().catch((err) => {
 });
 
 const netConfig = getNetworkConfig();
-const wallet = await GolemWallet.create(signer, walletConfigFromNetwork(netConfig, dataDir));
+const wallet = await initWalletWithRetry(
+  () => GolemWallet.create(signer, walletConfigFromNetwork(netConfig, dataDir)),
+).catch((err) => {
+  console.error(`Wallet init failed after retries: ${(err as Error).message}`);
+  process.exit(1);
+});
 
-const lightning = await createLightning(wallet.sdkWallet, netConfig, dataDir);
+const lightning = await initWalletWithRetry(
+  () => createLightning(wallet.sdkWallet, netConfig, dataDir),
+).catch((err) => {
+  console.error(`Lightning init failed after retries: ${(err as Error).message}`);
+  process.exit(1);
+});
 console.log('SwapManager started');
 
 // --- Ark address for OOR payments ---

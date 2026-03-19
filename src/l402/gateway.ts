@@ -24,6 +24,9 @@ import {
 import { InvoiceLimiter } from './invoice-limiter.js';
 import type { ResponseCache } from './response-cache.js';
 
+/** Boltz minimum reverse swap amount — requests below this are rejected with 400. */
+export const BOLTZ_MINIMUM_SATS = 333;
+
 interface PendingArkPayment {
   paymentId: string;
   paymentHash: string;
@@ -174,6 +177,13 @@ export function createL402Gateway(
   lightning: ArkadeSwaps,
   config: GatewayConfig,
 ): L402Gateway {
+  if (config.priceSats < BOLTZ_MINIMUM_SATS) {
+    throw new Error(
+      `priceSats (${config.priceSats}) is below Boltz minimum (${BOLTZ_MINIMUM_SATS} sats). ` +
+      `Set GOLEM_PRICE_SATS >= ${BOLTZ_MINIMUM_SATS}.`,
+    );
+  }
+
   const rootKeyStore = config.rootKeyStore ?? new MemoryRootKeyStore();
   const freePaths = new Set(config.freePaths ?? []);
   const caveats = config.caveats ?? [];
@@ -368,9 +378,13 @@ export function createL402Gateway(
     }
 
     // Determine effective price: cache hit → reduced price, miss → full price
+    // The display price is what the user sees in the 402 challenge body.
+    // The invoice price is what Boltz actually charges — must be >= BOLTZ_MINIMUM_SATS.
+    // These can differ: user pays the invoice price, but the 402 body shows the intended value.
     const effectivePrice = cacheHit
       ? Math.max(1, Math.ceil(priceSats * cachePricePercent / 100))
       : priceSats;
+    const invoicePrice = Math.max(BOLTZ_MINIMUM_SATS, effectivePrice);
 
     // Check for L402 Authorization header
     const authHeader = c.req.header('Authorization');
@@ -539,13 +553,23 @@ export function createL402Gateway(
     const maxRetries = 3;
     const backoffMs = [500, 1000, 2000];
 
+    let isClientError = false;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        invoiceResult = await lightning.createLightningInvoice({ amount: effectivePrice });
+        invoiceResult = await lightning.createLightningInvoice({ amount: invoicePrice });
         boltzCircuitBreaker.reset();
         break;
       } catch (err) {
         lastError = err;
+        const statusCode = (err as any)?.statusCode as number | undefined;
+
+        // 4xx = client/config error — retrying is pointless, don't trip circuit breaker
+        if (statusCode && statusCode >= 400 && statusCode < 500) {
+          isClientError = true;
+          console.error(`[gateway] Boltz rejected (${statusCode}): ${err instanceof Error ? err.message : err} — check GOLEM_PRICE_SATS`);
+          break;
+        }
+
         console.warn(`[gateway] Boltz retry ${attempt}/${maxRetries}: ${err instanceof Error ? err.message : err}`);
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, backoffMs[attempt - 1]));
@@ -554,6 +578,15 @@ export function createL402Gateway(
     }
 
     if (!invoiceResult) {
+      if (isClientError) {
+        // Config/request error — do NOT record in circuit breaker, return 500 (not 503)
+        console.error('[l402] Boltz invoice creation failed (client error):', lastError instanceof Error ? lastError.message : lastError);
+        return c.json(
+          { error: 'Invoice creation failed — check gateway configuration', detail: lastError instanceof Error ? lastError.message : String(lastError) },
+          500,
+        );
+      }
+      // Server/network error — record in circuit breaker
       boltzCircuitBreaker.record();
       console.error('[l402] Boltz invoice creation failed after retries:', lastError instanceof Error ? lastError.message : lastError);
       return c.json(
