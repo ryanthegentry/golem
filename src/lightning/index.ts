@@ -39,6 +39,19 @@ export function cleanupTerminalSwaps(db: import('better-sqlite3').Database): num
   return result.changes;
 }
 
+const STALE_PENDING_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function cleanupStalePendingSwaps(db: import('better-sqlite3').Database): number {
+  const cutoff = Date.now() - STALE_PENDING_AGE_MS;
+  const result = db.prepare(
+    `DELETE FROM boltz_swaps WHERE status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')}) AND created_at < ?`,
+  ).run(...TERMINAL_STATUSES, cutoff);
+  if (result.changes > 0) {
+    console.log(`[lightning] Cleaned up ${result.changes} stale pending swap(s) older than 24 hours`);
+  }
+  return result.changes;
+}
+
 /**
  * Create and start an ArkadeSwaps instance from an SDK wallet and network config.
  *
@@ -76,6 +89,7 @@ export async function createLightning(
     // generates 404s that feed the circuit breaker and flood logs.
     try {
       cleanupTerminalSwaps(db);
+      cleanupStalePendingSwaps(db);
     } catch (err) {
       // Non-fatal — table may not exist yet on first run
       console.warn('[lightning] Swap cleanup skipped:', err instanceof Error ? err.message : err);

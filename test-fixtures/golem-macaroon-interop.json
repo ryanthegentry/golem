@@ -1,9 +1,9 @@
 {
   "description": "Golem-minted L402 V2 binary macaroon for Go interop testing",
-  "macaroon_base64": "AgEFZ29sZW0CQgAAGfRLzjEnUKcs+Ouw/tggCwG5p8jUzFyFv6ft271TJV+qsdlUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACJHRpbWUtYmVmb3JlIDIwMjYtMDMtMTdUMjA6NTI6MzQuODMyWgAABiBd+76IzOteZMaHFGQ/jdxxQOsTTrLLsQoRYsVNCORkAw==",
-  "payment_hash": "19f44bce312750a72cf8ebb0fed8200b01b9a7c8d4cc5c85bfa7eddbbd53255f",
-  "root_key_id": "aab1d954",
-  "preimage": "ad2953760a2ae2b6f8aea7f0ba2ea8d5e14db0ebce1fd7e41f666687e152bd4b",
+  "macaroon_base64": "AgEFZ29sZW0CQgAAKPeYE1Jlpa+9gSmzGKorf7swLo7xOhO0PeEN7iglTcdJeSuMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACJHRpbWUtYmVmb3JlIDIwMjYtMDMtMjBUMjE6MDc6MDYuNjkyWgAABiCRa2togI3PoKS4Kn+x/OJIxNay8s/aL5JoTVpftTxicg==",
+  "payment_hash": "28f798135265a5afbd8129b318aa2b7fbb302e8ef13a13b43de10dee28254dc7",
+  "root_key_id": "49792b8c",
+  "preimage": "8b4cd46315ca817c8e597ea7e3471e215eb1aafb0eebf7dd91ef6c174fb9caf2",
   "location": "golem",
   "identifier_length": 66,
   "format": "V2 binary (TLV)",
