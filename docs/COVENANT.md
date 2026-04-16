@@ -20,6 +20,8 @@ None of these achieve: **server receives Lightning payments with zero key materi
 
 Arkade (the production Ark implementation by Ark Labs) supports introspection opcodes in its Script VM. These opcodes let a script examine the *transaction that's spending it* — specifically, what the outputs look like. This enables covenants: scripts that constrain where funds can go without requiring a signature.
 
+**Critical distinction:** These covenants are enforced **off-chain** by the Introspector (a TEE-protected signing service), NOT by Bitcoin consensus. The Introspector evaluates Arkade Script in a forked btcd/txscript VM and co-signs if conditions are met. Bitcoin full nodes have no knowledge of Arkade Script. On the L1 exit path, covenant opcodes are NOT available — the exit path falls back to a plain `CHECKSIG + CSV` (see [Arkade Compiler](https://github.com/arkade-os/compiler)). This means covenant enforcement provides **liveness guarantees** (cheap/fast programmable operations), not **safety guarantees** (fund recovery). Safety comes from the unilateral exit path, which requires only the user's key + CSV timelock expiry.
+
 ## Covenant Claim Script
 
 A standard Boltz VHTLC claim requires `preimage + signature`:
@@ -88,41 +90,34 @@ The complete architecture for an agent-managed VTXO. Three leaves aligned with a
 
 **Leaf 0 — Covenant Refresh (agent-operated, no signature):**
 - `MultisigTapscript([introspector_tweaked_key, server_pubkey])`
-- Introspector evaluates Arkade Script bytecode: `OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY` (4 bytes: `00d15188`)
-- Checks output[0] is taproot (version == 1). Agent enforces output destination = same address.
+- Introspector evaluates Arkade Script bytecode against the transaction
 - The agent uses this leaf for all autonomous operations: 1:1 refresh and N:1 consolidation. No private key needed.
 - Classified as "forfeit" by arkd (MultisigClosure) — contains server pubkey.
 
-**Leaf 0 Threat Model — Refresh Output Destination:**
+**Leaf 0 Arkade Script Options:**
 
-The refresh Arkade Script checks output taproot version only, not output destination. Hardcoding the witness program into the script is impossible due to circular dependency: the VTXO address is derived from the taptree which contains the Arkade Script which would contain the address. The output destination is enforced by the agent constructing the transaction to the same address.
+*Option A — Version-only check (4 bytes: `00d15188`):*
+`OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY` — checks output[0] is taproot (version == 1) only. Output destination enforced by agent constructing the transaction. Weaker: a compromised agent process could construct a tx to a different taproot address, and the Introspector would still sign (the Arkade Script passes for ANY taproot output).
 
-*Attack conditions for refresh output redirection:*
-- An attacker must compromise the agent process (not just extract a key — there is no key to extract).
-- The attacker must construct a valid offchain tx with a different taproot output address.
-- Both the Introspector AND arkd must co-sign. Neither checks output destination:
-  - The Introspector evaluates the Arkade Script (`00d15188`), which passes for ANY taproot output.
-  - arkd validates forfeit closure structure (server pubkey present in MultisigClosure leaves) but does not inspect output addresses.
-- The redirect can only occur during a refresh or consolidation operation — these happen when VTXOs approach expiry (default: 3-day safety margin before 7-day VTXO expiry on mainnet) or when VTXOs exceed the consolidation threshold (default: >10 VTXOs or dust cleanup). The RefreshAgent polls every 60 seconds.
-- Between refresh windows, there is no transaction for the attacker to redirect. The attacker must sustain agent process access and wait for (or trigger) a refresh cycle.
-- The VTXO owner can race the attacker by spending via Leaf 1 (collaborative, alice + server) from their mobile app at any time. The owner's spend and the attacker's refresh are competing for the same VTXO input — only one can succeed.
+*Option B — Full recursive covenant (7 bytes: `00d100ca7b8887`):*
+`OP_0 OP_INSPECTINPUTSCRIPTPUBKEY OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_EQUALVERIFY` — enforces `input.scriptPubKey == output.scriptPubKey`. The output MUST have the same script as the input. A compromised agent cannot redirect outputs.
 
-*Why the full recursive covenant doesn't work:*
+**Status (April 2026):** Option B is now possible. [ArkLabsHQ/introspector PR #63](https://github.com/ArkLabsHQ/introspector/pull/63) (merged Apr 15, 2026) fixed `OP_INSPECTINPUTSCRIPTPUBKEY` to trace through Ark's checkpoint wrapper and return the original VTXO's pkScript instead of the checkpoint WP. This was previously documented as Fix Option #1 ("Introspector trace-through mode") below. The fix adds `FetchVtxoPrevOutPkScript()` to the `ArkPrevOutFetcher` interface, which resolves the correct output from the Ark Tx at the proper index.
 
-The root cause is that `OP_INSPECTINPUTSCRIPTPUBKEY` returns the checkpoint's witness program, not the original VTXO's. Ark's `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction (serverUnroll + collaborative). When the Introspector evaluates the Arkade Script, `OP_INSPECTINPUTSCRIPTPUBKEY` sees the checkpoint WP (2-leaf), not the VTXO WP (3-leaf), so `input == output` always fails.
+**Note on exit path:** The recursive covenant enforcement exists only in the Introspector's Arkade Script VM (off-chain). On the L1 unilateral exit path (Leaf 2), the covenant is NOT enforced — the exit script is plain `CHECKSIG + CSV`. This is by design: the Arkade compiler [automatically generates](https://github.com/arkade-os/compiler) a `serverVariant: false` exit path that strips covenant opcodes and replaces them with `checkSig(user) && after N blocks`. Covenant integrity depends on the Introspector; fund recovery does not.
 
-*Two possible fixes (both require Ark Labs changes, not Golem changes):*
+*Prior state (resolved by PR #63):*
 
-1. **Introspector "trace-through" mode:** The Introspector could resolve `OP_INSPECTINPUTSCRIPTPUBKEY` by tracing through the checkpoint wrapper to return the original VTXO's scriptPubKey. This would require the Introspector to understand Ark's checkpoint structure and unwrap one level of indirection. The Arkade Script would then be the original 7-byte recursive covenant (`00d100ca7b8887`: input[0].scriptPubKey == output[0].scriptPubKey).
-2. **arkd custom checkpoint taptrees:** If arkd accepted custom checkpoint scripts (instead of always generating 2-leaf serverUnroll + collaborative), the checkpoint could preserve the original VTXO's script structure, making `OP_INSPECTINPUTSCRIPTPUBKEY` return the expected value.
+~~The root cause was that `OP_INSPECTINPUTSCRIPTPUBKEY` returned the checkpoint's witness program, not the original VTXO's. Ark's `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction (serverUnroll + collaborative). When the Introspector evaluated the Arkade Script, `OP_INSPECTINPUTSCRIPTPUBKEY` saw the checkpoint WP (2-leaf), not the VTXO WP (3-leaf), so `input == output` always failed.~~
 
-Either fix would eliminate the agent-integrity assumption for refresh destination enforcement, achieving the full "server breach → attacker gets nothing" guarantee.
-
-*Bottom line:* This is still dramatically better than Phase 1 (hot key on server = entire wallet extractable). In Tier 1.5, there is no key to extract. An attacker with sustained agent process access can redirect refresh outputs but must race the VTXO owner and can only act during refresh windows. The attack requires compromising the agent process, not just reading memory or disk.
+~~Two possible fixes (both require Ark Labs changes, not Golem changes):~~
+~~1. **Introspector "trace-through" mode:** Resolved by PR #63.~~
+~~2. **arkd custom checkpoint taptrees:** No longer needed.~~
 
 **Leaf 1 — Collaborative Path (user + server):**
 - `<alice_pubkey> OP_CHECKSIGVERIFY <operator_pubkey> OP_CHECKSIG`
 - Used for spending (alice signs on mobile), Ark protocol operations (OOR, rounds), and forfeit transactions.
+- **Forfeit transactions require BOTH signatures** — the server cannot manufacture forfeits unilaterally. The user signs forfeits during round registration or offboard operations, and the server holds them as insurance.
 - Key generated on mobile, pubkey imported to CLI via `golem init --import --pubkey <hex>`. Private key NEVER touches the server.
 - This is the "recursion breaker" — the only leaf that can change the covenant destination.
 - Classified as "forfeit" by arkd (MultisigClosure) — contains server pubkey.
@@ -145,21 +140,150 @@ Either fix would eliminate the agent-integrity assumption for refresh destinatio
 | Key deletion concerns | Risk | Key never touches server |
 | Sweep-based tier transitions | Complex | Unnecessary |
 
+## Introspector Trust Model
+
+The Introspector is a TEE-protected co-signing service that evaluates Arkade Script before signing. Understanding what it can and cannot do is critical for honest risk communication.
+
+### Tweaked Key Construction
+
+The Introspector does NOT hold a single signing key that signs anything. It holds a base key that is tweaked per-contract:
+
+```
+scriptHash = TaggedHash("ArkScriptHash", arkade_script)    // BIP-340 tagged hash
+tweaked_pubkey = introspector_base_key + scriptHash * G     // EC point addition
+tweaked_privkey = introspector_base_privkey + scriptHash    // scalar addition (with Y-parity negation)
+```
+
+Source: [`ArkLabsHQ/introspector/pkg/arkade/tweak.go`](https://github.com/ArkLabsHQ/introspector/blob/main/pkg/arkade/tweak.go). The tweak binds the Introspector's signing authority to a specific Arkade Script. An attacker who extracts the base key CAN derive tweaked keys for any script (scripts are public data), but the per-script binding means a single key compromise doesn't grant signing authority over arbitrary scripts outside the Introspector's domain.
+
+### Forfeit Mechanics (Critical Correction)
+
+Forfeit transactions **always require the user's signature**. The VTXO leaf has exactly two spend paths:
+- **Cooperative/forfeit:** 2-of-2 (user + server). No timelock. Both sigs required.
+- **Exit:** user-only with CSV relative timelock (~60 blocks / ~10 hours).
+
+A forfeit transaction cannot exist unless the user previously signed it (during round registration, offboard, or OOR). The server/Introspector holds forfeits as insurance — it cannot manufacture them unilaterally.
+
+Sources:
+- [Second: Forfeits](https://second.tech/docs/learn/forfeits) — "The user signs this path to make a forfeit transaction"
+- [Ark Protocol: VTXOs](https://docs.second.tech/ark-protocol/vtxo/) — "Leaf transactions use 2-of-2 multisigs between user and server for forfeits"
+- [Arkade Docs](https://docs.arkadeos.com/learn/architecture/components) — "Each virtual transaction is cosigned by the respective VTXO owners and the Arkade Signer"
+
+**Implication:** For Board/Refresh VTXOs that the user has never forfeited, an Introspector compromise does NOT create a race-to-broadcast attack. The attacker has no forfeit to race with. Unilateral exit succeeds (gated only on user key + CSV expiry + economic viability).
+
+### What a Compromised Introspector Can Do
+
+1. **Sign covenant-violating transactions** on the cooperative path — IF the other 2-of-2 signer (user or server) also signs. The covenant is enforced only by the Introspector's software; Bitcoin consensus has no knowledge of Arkade Script rules.
+
+2. **Cosign with a stale user delegation** — If the user has pre-committed a SIGHASH_ALL|ANYONECANPAY delegation (e.g., for automated refresh), the attacker can combine it with an attacker-controlled connector input to redirect funds. This is the genuinely novel risk class Phase 1.5 introduces. Source: [Arkade blog — delegation mechanic](https://blog.arklabs.xyz/adios-expiry-rethinking-liveness-and-liquidity-in-arkade/).
+
+3. **Refuse to sign** (censorship/griefing) — forcing users into unilateral exit.
+
+### What a Compromised Introspector Cannot Do
+
+1. **Unilaterally forge forfeit transactions** — requires user sig (see above).
+2. **Prevent unilateral exit** — Leaf 2 (CSV + alice_key) bypasses Introspector entirely.
+3. **Sign for scripts outside its domain** — the tweaked key is bound to specific Arkade Scripts (though an attacker with the base key can derive any tweak).
+
+### Three-Way Trust Decomposition
+
+**SAFETY (can user recover funds to L1?):**
+- Board VTXOs: Does NOT depend on Introspector. CSV exit uses alice_key only.
+- Refresh VTXOs: Same as Board. Trustless after round confirmation.
+- OOR/Spend VTXOs: Temporarily depends on "sender + server not colluding." Trustless after refresh into a round.
+- Covenant-encumbered VTXOs (Phase 1.5): Depends on Introspector integrity for covenant enforcement; compromised Introspector can cosign covenant-violating spends if user has pre-committed a delegation.
+
+**LIVENESS (can user do cheap/fast/programmable ops?):**
+- FULLY depends on Introspector being honest, online, uncompromised.
+- Compromised/offline Introspector → user must fall back to unilateral exit (slower, more expensive).
+
+**COVENANT INTEGRITY (are Arkade Script rules enforced?):**
+- Depends on Introspector + TEE.
+- If compromised, covenant rules become unenforced on the cooperative path.
+- On the L1 exit path, covenants are NEVER enforced (exit script is plain CHECKSIG + CSV).
+
+### Comparison to On-Chain Covenants
+
+| Property | Introspector (Arkade) | OP_CTV (if activated) |
+|---|---|---|
+| Enforcement | Off-chain (TEE + software) | On-chain consensus |
+| Can be bypassed? | Yes (key compromise) | No |
+| Single point of failure | Yes (Introspector key/TEE) | No |
+| Available today | Yes | No (needs soft fork) |
+| Requires soft fork | No | Yes |
+
+If OP_CTV or equivalent covenant opcodes were activated on Bitcoin, the Introspector would become unnecessary — its function would be replaced by on-chain consensus validation, eliminating the single point of failure entirely.
+
+## Failure Mode Enumeration
+
+Scenarios where a Golem user loses ability to recover funds to L1 under their control:
+
+1. **User loses alice_key.** CSV exit requires user sig. No recovery. *(Not Introspector-related.)*
+
+2. **VTXO expires before user broadcasts exit.** 7-day expiry on Arkade mainnet. After expiry, operator sweep path activates. *(Not Introspector-related.)*
+
+3. **Exit cost exceeds VTXO value during fee spike.** Economic, not cryptographic. Deep tree position (3+ levels) during high-fee periods requires multiple sequential on-chain transactions. *(Not Introspector-related.)*
+
+4. **Unrefreshed OOR/spend VTXO double-spent.** Previous sender colluded with ASP to double-spend before recipient refreshes into a round. Recipient loses broadcast race. *(Structural to ALL Ark implementations including Bark — not Introspector-specific. Introspector compromise just makes the "server" side of collusion freely available.)*
+
+5. **Covenant-encumbered VTXO (Phase 1.5) spent via compromised Introspector cosigning with stale user delegation.** Funds go to attacker instead of covenant-specified destination. *(This IS the novel risk class Phase 1.5 introduces.)* Mitigated by: short intent TTLs, ephemeral covenant VTXOs (immediate refresh into standard VTXOs post-claim), and agent-as-watchtower monitoring.
+
+6. **Wallet DB / presigned transaction data loss.** Seed phrase alone is insufficient to reconstruct the exit path — the pre-signed transaction tree is needed. *(Mitigated by: VTXO backup, libvpack-rs vendor-neutral recovery tooling.)*
+
+**Removed from prior analysis:** "attacker uses compromised Introspector to unilaterally forfeit user's Board/Refresh VTXO" — this is cryptographically impossible. Forfeits require user signature (see Forfeit Mechanics above).
+
+## Bark vs Arkade Divergence
+
+Second (Bark) and Ark Labs (Arkade) implement the same Ark protocol but chose opposite architectural paths for covenants:
+
+| | Arkade (Ark Labs) | Bark (Second) |
+|---|---|---|
+| Covenant model | Arkade Script VM + Introspector (TEE co-signer) | clArk (covenant-less): MuSig2 n-of-n, ephemeral key deletion |
+| TEE dependency | Yes | No |
+| Custom VM | Yes (~60 custom opcodes) | No |
+| Keyless receive | Yes (via Introspector + Arkade Script) | No — cannot do keyless receive |
+| Refresh atomicity | Connectors | Hash-locks (hArk, as of v0.1.0-beta.6) |
+| CTV stance | Prove demand now, migrate when CTV activates | Wait for CTV as the "proper" path |
+
+Steven Roose (Second CEO) actively pushes CTV+CSFS on [Delving Bitcoin](https://delvingbitcoin.org/t/the-ark-case-for-ctv/1528) as the canonical solution. Ark Labs maintainer's strategy — ship with Introspector now, migrate to on-chain covenants when available — is defensible on market-pull grounds but introduces the TEE trust assumption that Bark avoids.
+
+This divergence between two competent teams implementing the same protocol is a substantive data point. Golem should represent it honestly, not gloss over it.
+
+## External Trust Signals
+
+**Arkade ToS admissions** (cite-able for investor/user comms):
+- "Trusted Execution Environments provide security guarantees, but they are not perfect. Hardware vulnerabilities, side-channel attacks, or implementation flaws could compromise the Signer." — [Arkade ToS](https://arkadeos.com/terms-of-service)
+- "Exit costs may exceed the VTXO value." — [Arkade ToS](https://arkadeos.com/terms-of-service)
+
+**Bitcoin Layers** ([bitcoinlayers.org](https://www.bitcoinlayers.org/layers/arkade)): Arkade listed as "Under Review" with all four risk categories unscored (BTC Custody, Data Availability, Network Operators, Finality Guarantees).
+
+**TEE security research:**
+- Ledger Donjon: [TEE — When "Trusted" Doesn't Mean "Secure"](https://www.ledger.com/tee-when-trusted-doesnt-mean-secure) — side-channel attacks (Spectre, Meltdown), hardware manufacturer as ultimate root of trust.
+- a16z: [TEE Primer](https://a16zcrypto.com/posts/article/trusted-execution-environments-tees-primer/) — "Build for privacy, not for integrity. TEEs should not be used as the only tool to protect the integrity of a blockchain protocol."
+
+**Arkade compiler exit-path limitation:**
+From [arkade-os/compiler](https://github.com/arkade-os/compiler): Each contract function compiles to two variants — cooperative (`serverVariant: true`, includes Arkade opcodes) and exit (`serverVariant: false`, plain `checkSig(user) && after N blocks`). Covenant opcodes like `OP_INSPECTOUTPUTSCRIPTPUBKEY` are NOT available in pure Bitcoin Script. Meaning: **the covenant enforces in the virtual mempool but does NOT enforce on L1.** Exit-path script is a plain CHECKSIG + CSV.
+
+**Community tooling:**
+[libvpack-rs](https://github.com/jgmcalpine/libvpack-rs) — vendor-neutral VTXO verifier and L1 exit transaction generator. Explicitly calls out "Vendor-Locked Recovery" as a risk. Potential collaboration target for Golem's unilateral exit story.
+
+## Open Questions for Ark Labs maintainer
+
+1. For RecursiveVtxo contracts, can the exit-path N-of-N be structured such that Alice can pre-commit a sweep to a specific user-designated safe-harbor L1 address at VTXO creation time, without requiring her live signature during exit? If yes, genuine keyless emergency exit. If no, the mobile PWA signer is load-bearing for the full trust-minimized story.
+
+2. Does the Boltz Arkade gateway support covenant-restricted VHTLCs (`claimCovenant: true` equivalent for Ark)? This is the P0 gate for the claim daemon.
+
+3. Is PR #63 deployed on the mainnet Introspector at arkade.computer? What version runs there?
+
 ## Resolved Questions
 
 1. **Round/forfeit interaction:** Resolved. Covenant VTXOs participate in rounds normally. The refresh leaf (MultisigClosure with Introspector tweaked key + server) is classified as a "forfeit closure" by arkd. The server can construct forfeit transactions using this leaf. Validated on regtest.
 
 2. **OP_SUCCESS semantics:** Confirmed safe. Arkade's VM executes these opcodes (OP_HASH160, OP_INSPECTOUTPUTSCRIPTPUBKEY, OP_INSPECTOUTPUTVALUE, OP_INSPECTINPUTSCRIPTPUBKEY, OP_GREATERTHANOREQUAL64) with proper semantics. The Introspector evaluates Arkade Script bytecode against the ark transaction context.
 
-3. **Script size limits:** Three-leaf taptree with Arkade Scripts fits well within limits. Refresh Arkade Script is just 4 bytes (`00d15188`). Claim Arkade Script is ~73 bytes.
+3. **Script size limits:** Three-leaf taptree with Arkade Scripts fits well within limits. Refresh Arkade Script is 4-7 bytes. Claim Arkade Script is ~73 bytes.
 
-## Open Questions
-
-1. **Boltz coordination:** Does the Arkade-Boltz gateway (`api.boltz.mutinynet.arkade.sh`) need to support covenant VHTLCs? Or can Golem construct swaps with a custom claim script via the existing API? If Boltz must update, timeline depends on Ark Labs + Boltz coordination.
-
-2. **Recursive covenant for refresh:** The ideal recursive covenant (`OP_INSPECTINPUTSCRIPTPUBKEY == OP_INSPECTOUTPUTSCRIPTPUBKEY`) doesn't work with Ark's checkpoint architecture. `buildOffchainTx` wraps every input in a 2-leaf checkpoint transaction, so the arkTx's input scriptPubKey differs from the original VTXO's. Current workaround: check output taproot version only, agent enforces destination. Full recursive covenant requires either Introspector "trace through checkpoints" support, or arkd accepting custom checkpoint taptrees.
-
-3. **VTXO expiry:** `arkade.computer` mainnet uses 7-day VTXO expiry. The RefreshAgent must be reliable. Covenant refresh eliminates the signing key requirement but doesn't eliminate the liveness requirement.
+4. **Recursive covenant for refresh:** RESOLVED (April 2026). [ArkLabsHQ/introspector PR #63](https://github.com/ArkLabsHQ/introspector/pull/63) (merged Apr 15, 2026) implemented Fix Option #1 ("Introspector trace-through mode"). `OP_INSPECTINPUTSCRIPTPUBKEY` now returns the original VTXO's pkScript instead of the checkpoint WP. The 7-byte recursive covenant (`00d100ca7b8887`: `input[0].scriptPubKey == output[0].scriptPubKey`) now works correctly. See Leaf 0 section above for details.
 
 ## What Golem Has Today (Phase 1)
 
