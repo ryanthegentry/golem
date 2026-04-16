@@ -21,10 +21,10 @@ vi.mock('./introspector.js', () => ({
   submitIntrospectorTx: vi.fn(),
 }));
 
-// Deterministic test keys
-const alicePubkey = new Uint8Array(32).fill(0x01);
-const serverPubkey = new Uint8Array(32).fill(0x02);
-const introspectorPubkey = new Uint8Array(32).fill(0x03);
+// Valid secp256k1 x-only pubkeys (generator point multiples: privkey = 1, 2, 3)
+const alicePubkey = hex.decode('79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+const serverPubkey = hex.decode('c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5');
+const introspectorPubkey = hex.decode('f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9');
 
 const covenantResult = buildCovenantVtxo({
   alicePubkey,

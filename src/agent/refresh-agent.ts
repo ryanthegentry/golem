@@ -1,7 +1,10 @@
-import type { ExtendedVirtualCoin } from '@arkade-os/sdk';
+import type { ExtendedVirtualCoin, VtxoScript, CSVMultisigTapscript } from '@arkade-os/sdk';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 import { DEFAULT_RESERVE_PER_VTXO, DEFAULT_EXIT_THRESHOLD_BLOCKS } from '../config/defaults.js';
 import { isBlockHeight, getNearestExpiryMs, blockHeightToRemainingMs, BlockHeightFetcher } from './expiry.js';
+import { isCovenantVtxoExpiring } from '../covenant/vtxo-detection.js';
+import { covenantRefresh } from '../covenant/covenant-refresh.js';
+import { wrapVtxoIntoCovenant } from '../covenant/covenant-wrapper.js';
 
 interface RefreshAgentConfig {
   /** How often to check for expiring VTXOs (ms). Default: 60_000 (1 min) */
@@ -32,6 +35,16 @@ interface EmergencyState {
   emergencyExitCompleted: boolean;
 }
 
+export interface CovenantRefreshConfig {
+  introspectorUrl: string;
+  covenantPkScriptHex: string;
+  vtxoScript: VtxoScript;
+  refreshLeafScript: Uint8Array;
+  refreshArkadeScript: Uint8Array;
+  serverUnrollScript: CSVMultisigTapscript.Type;
+  covenantAddress: string;
+}
+
 export const DEFAULT_REFRESH_CONFIG: RefreshAgentConfig = {
   pollIntervalMs: 60_000,
   safetyMarginMs: 3 * 24 * 60 * 60 * 1000, // 3 days
@@ -53,7 +66,16 @@ export type RefreshEvent =
   | { type: 'emergency_exit_triggered'; reason: string; timestamp: string }
   | { type: 'emergency_exit_completed'; txid: string; method: 'offboard' | 'unroll'; timestamp: string }
   | { type: 'emergency_exit_failed'; error: string; timestamp: string }
-  | { type: 'stopped'; timestamp: string };
+  | { type: 'stopped'; timestamp: string }
+  | { type: 'covenant_wrap_start'; vtxoCount: number; timestamp: string }
+  | { type: 'covenant_wrap_ok'; txid: string; timestamp: string }
+  | { type: 'covenant_wrap_error'; error: string; timestamp: string }
+  | { type: 'covenant_refresh_start'; vtxoCount: number; timestamp: string }
+  | { type: 'covenant_refresh_ok'; txid: string; timestamp: string }
+  | { type: 'covenant_refresh_error'; error: string; timestamp: string }
+  | { type: 'covenant_consolidation_start'; vtxoCount: number; totalSats: number; timestamp: string }
+  | { type: 'covenant_consolidation_ok'; txid: string; inputCount: number; timestamp: string }
+  | { type: 'covenant_consolidation_error'; error: string; timestamp: string };
 
 /** Distributive Omit that preserves discriminated union members. */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -87,6 +109,7 @@ export class RefreshAgent {
     private readonly config: RefreshAgentConfig = DEFAULT_REFRESH_CONFIG,
     private readonly onEvent?: RefreshEventHandler,
     private readonly gateway?: { shutdown(): void },
+    private readonly covenantConfig?: CovenantRefreshConfig,
   ) {
     this.blockHeightFetcher = config.esploraUrl
       ? new BlockHeightFetcher(config.esploraUrl)
@@ -141,6 +164,20 @@ export class RefreshAgent {
     // If emergency exit already completed, do nothing
     if (this.emergency.emergencyExitCompleted) return false;
 
+    // ─── Covenant: query covenant VTXOs ──────────────────────────────────
+    let covenantVtxos: Array<{ txid: string; vout: number; value: number; virtualStatus: { state?: string; batchExpiry?: number } }> = [];
+    if (this.covenantConfig) {
+      try {
+        const result = await (this.wallet as any).sdkWallet.indexerProvider.getVtxos({
+          scripts: [this.covenantConfig.covenantPkScriptHex],
+          spendableOnly: true,
+        });
+        covenantVtxos = result.vtxos ?? [];
+      } catch {
+        // Indexer may be unreachable — continue with cooperative path
+      }
+    }
+
     let refreshed = false;
 
     try {
@@ -186,6 +223,55 @@ export class RefreshAgent {
         }
       }
 
+      // ─── Covenant: wrap standard VTXOs into covenant ─────────────────────
+      if (this.covenantConfig && spendable.length > 0) {
+        try {
+          this.emit({ type: 'covenant_wrap_start', vtxoCount: spendable.length });
+          const txid = await wrapVtxoIntoCovenant(
+            this.wallet,
+            spendable[0] as ExtendedVirtualCoin,
+            this.covenantConfig.covenantAddress,
+          );
+          this.emit({ type: 'covenant_wrap_ok', txid });
+          return false; // Wrap done — skip rest of tick
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.emit({ type: 'covenant_wrap_error', error: message });
+          return true;
+        }
+      }
+
+      // ─── Covenant: refresh expiring covenant VTXOs ───────────────────────
+      if (this.covenantConfig && covenantVtxos.length > 0) {
+        const expiringCov = covenantVtxos.filter(v =>
+          isCovenantVtxoExpiring(
+            { virtualStatus: { batchExpiry: v.virtualStatus?.batchExpiry } },
+            this.config.safetyMarginMs,
+            currentBlockHeight,
+          ),
+        );
+        if (expiringCov.length > 0) {
+          try {
+            this.emit({ type: 'covenant_refresh_start', vtxoCount: expiringCov.length });
+            const txid = await covenantRefresh({
+              vtxos: expiringCov,
+              vtxoScript: this.covenantConfig.vtxoScript,
+              refreshLeafScript: this.covenantConfig.refreshLeafScript,
+              refreshArkadeScript: this.covenantConfig.refreshArkadeScript,
+              serverUnrollScript: this.covenantConfig.serverUnrollScript,
+              introspectorUrl: this.covenantConfig.introspectorUrl,
+              arkProvider: (this.wallet as any).sdkWallet.arkProvider,
+            });
+            this.emit({ type: 'covenant_refresh_ok', txid });
+            refreshed = true;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.emit({ type: 'covenant_refresh_error', error: message });
+            return true;
+          }
+        }
+      }
+
       if (expiring.length > 0) {
         this.emit({
           type: 'refresh_start',
@@ -214,6 +300,36 @@ export class RefreshAgent {
 
     // Consolidation: only when no refresh happened this tick
     if (refreshed) return false;
+
+    // ─── Covenant: consolidate covenant VTXOs ──────────────────────────────
+    if (this.covenantConfig && covenantVtxos.length > this.config.maxVtxoCount) {
+      try {
+        const totalSats = covenantVtxos.reduce((sum, v) => sum + v.value, 0);
+        this.emit({
+          type: 'covenant_consolidation_start',
+          vtxoCount: covenantVtxos.length,
+          totalSats,
+        });
+        const txid = await covenantRefresh({
+          vtxos: covenantVtxos,
+          vtxoScript: this.covenantConfig.vtxoScript,
+          refreshLeafScript: this.covenantConfig.refreshLeafScript,
+          refreshArkadeScript: this.covenantConfig.refreshArkadeScript,
+          serverUnrollScript: this.covenantConfig.serverUnrollScript,
+          introspectorUrl: this.covenantConfig.introspectorUrl,
+          arkProvider: (this.wallet as any).sdkWallet.arkProvider,
+        });
+        this.emit({
+          type: 'covenant_consolidation_ok',
+          txid,
+          inputCount: covenantVtxos.length,
+        });
+        return false;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.emit({ type: 'covenant_consolidation_error', error: message });
+      }
+    }
 
     try {
       const consolidation = await this.shouldConsolidate();

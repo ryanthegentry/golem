@@ -40,8 +40,8 @@ OP_0 OP_INSPECTOUTPUTVALUE PUSH8 <le_amount> OP_GTE64
 pub fn build_refresh_arkade_script() -> Vec<u8>;
 ```
 
-**Bytecode:** `OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY`
-Verifies output[0] is taproot (version 1). Destination enforced by tx construction.
+**Bytecode:** `OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY OP_0 OP_INSPECTINPUTSCRIPTPUBKEY OP_ROT OP_EQUALVERIFY OP_EQUAL`
+Full recursive covenant: enforces input[0].scriptPubKey == output[0].scriptPubKey. Enabled by Introspector PR #63 (OP_INSPECTINPUTSCRIPTPUBKEY traces through checkpoint wrappers).
 
 ## Crypto Primitives
 

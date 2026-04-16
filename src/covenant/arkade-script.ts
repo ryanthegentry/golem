@@ -30,27 +30,23 @@ export function buildClaimArkadeScript(
 
 /**
  * Build Arkade Script bytecode for covenant refresh:
- * Verifies output[0] is a valid taproot output (version == 1).
+ * Full recursive covenant enforcing input[0].scriptPubKey == output[0].scriptPubKey.
+ * Enabled by Introspector PR #63 which makes OP_INSPECTINPUTSCRIPTPUBKEY
+ * trace through checkpoint wrappers to the original VTXO's scriptPubKey.
  *
- * DESIGN NOTE: The ideal recursive covenant (input == output via
- * OP_INSPECTINPUTSCRIPTPUBKEY) doesn't work with Ark's checkpoint
- * architecture. buildOffchainTx wraps every input in a checkpoint tx
- * whose output has a 2-leaf taptree (serverUnroll + collaborative),
- * so the arkTx's input scriptPubKey != the VTXO's scriptPubKey.
- * The Introspector evaluates the Arkade Script against the arkTx,
- * where OP_INSPECTINPUTSCRIPTPUBKEY returns the checkpoint's WP.
- *
- * Workaround: Check output taproot version only. The output destination
- * is enforced by the agent constructing the tx to the same address.
- *
- * Full recursive covenant requires either:
- *   (a) Introspector "trace through checkpoints" support, or
- *   (b) arkd accepting custom checkpoint taptrees
+ * Bytecode: 00 d1 00 ca 7b 88 87
+ *   OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY → [wp_out, ver_out]
+ *   OP_0 OP_INSPECTINPUTSCRIPTPUBKEY  → [wp_out, ver_out, wp_in, ver_in]
+ *   OP_ROT                            → [wp_out, wp_in, ver_in, ver_out]
+ *   OP_EQUALVERIFY                    → [wp_out, wp_in] (versions match)
+ *   OP_EQUAL                          → [1/0] (witness programs match)
  */
 export function buildRefreshArkadeScript(): Uint8Array {
   return new Uint8Array([
-    0x00, 0xd1,   // OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY → [wp, version]
-    0x51, 0x88,   // OP_1 OP_EQUALVERIFY → version == 1 (taproot)
-    // Stack: [wp] — 32-byte witness program is non-zero = truthy
+    0x00, 0xd1,   // OP_0 OP_INSPECTOUTPUTSCRIPTPUBKEY → [wp_out, ver_out]
+    0x00, 0xca,   // OP_0 OP_INSPECTINPUTSCRIPTPUBKEY  → [wp_out, ver_out, wp_in, ver_in]
+    0x7b,         // OP_ROT                            → [wp_out, wp_in, ver_in, ver_out]
+    0x88,         // OP_EQUALVERIFY                    → [wp_out, wp_in]
+    0x87,         // OP_EQUAL                          → [1/0]
   ]);
 }

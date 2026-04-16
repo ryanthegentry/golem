@@ -1,5 +1,6 @@
 import { base64 } from '@scure/base';
-import { Transaction, RestArkProvider } from '@arkade-os/sdk';
+import type { ArkProvider } from '@arkade-os/sdk';
+import { Transaction } from '@arkade-os/sdk';
 
 /**
  * Submit transaction to the Introspector for signing.
@@ -42,7 +43,7 @@ export async function submitCovenantTx(params: {
   introspectorUrl: string;
   arkTx: Transaction;
   checkpoints: Transaction[];
-  arkProvider: RestArkProvider;
+  arkProvider: ArkProvider;
 }): Promise<string> {
   const { introspectorUrl, arkTx, checkpoints, arkProvider } = params;
 
