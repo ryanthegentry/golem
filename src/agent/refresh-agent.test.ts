@@ -535,4 +535,191 @@ describe('RefreshAgent', () => {
       agent.stop();
     });
   });
+
+  describe('covenant dual-mode', () => {
+    // Mock covenant config — uses fake values since unit tests don't hit Introspector
+    const MOCK_COVENANT_CONFIG = {
+      introspectorUrl: 'http://localhost:7073',
+      covenantPkScriptHex: 'deadbeef'.repeat(4),
+      vtxoScript: {} as any,  // VtxoScript mock
+      refreshLeafScript: new Uint8Array([0x00, 0xd1]),
+      refreshArkadeScript: new Uint8Array([0x00, 0xd1, 0x00, 0xca, 0x7b, 0x88, 0x87]),
+      serverUnrollScript: {} as any,
+      covenantAddress: 'tark1covenant_mock_address',
+    };
+
+    function createCovenantMockWallet(overrides: Record<string, any> = {}) {
+      return {
+        getExpiringVtxos: vi.fn().mockResolvedValue([]),
+        renewVtxos: vi.fn().mockResolvedValue('coop-refresh-txid'),
+        getVtxos: vi.fn().mockResolvedValue([]),
+        consolidateVtxos: vi.fn().mockResolvedValue('coop-consolidate-txid'),
+        settle: vi.fn().mockResolvedValue('wrap-txid'),
+        getOnchainReserveBalance: vi.fn().mockResolvedValue(100_000),
+        sdkWallet: {
+          indexerProvider: {
+            getVtxos: vi.fn().mockResolvedValue({ vtxos: [] }),
+          },
+          arkProvider: {},
+        },
+        ...overrides,
+      } as unknown as GolemWallet;
+    }
+
+    it('no covenantConfig = pure cooperative mode (backward compat)', async () => {
+      const wallet = createMockWallet();
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e));
+
+      await agent.tick();
+
+      // Should NOT emit any covenant events
+      const covenantEvents = events.filter(e => e.type.startsWith('covenant_'));
+      expect(covenantEvents).toHaveLength(0);
+    });
+
+    it('with covenantConfig: queries indexer for covenant VTXOs', async () => {
+      const wallet = createCovenantMockWallet();
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      expect((wallet as any).sdkWallet.indexerProvider.getVtxos).toHaveBeenCalledWith({
+        scripts: [MOCK_COVENANT_CONFIG.covenantPkScriptHex],
+        spendableOnly: true,
+      });
+    });
+
+    it('with covenantConfig: wraps standard VTXOs when they exist', async () => {
+      const standardVtxos = [fakeVtxo(10_000)];
+      const wallet = createCovenantMockWallet({
+        getVtxos: vi.fn().mockResolvedValue(standardVtxos),
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      const wrapEvents = events.filter(e => e.type === 'covenant_wrap_start' || e.type === 'covenant_wrap_ok');
+      expect(wrapEvents).toHaveLength(2);
+      expect(wrapEvents[0].type).toBe('covenant_wrap_start');
+      expect(wrapEvents[1].type).toBe('covenant_wrap_ok');
+    });
+
+    it('with covenantConfig: wrapping skips rest of tick', async () => {
+      const standardVtxos = [fakeVtxo(10_000)];
+      const wallet = createCovenantMockWallet({
+        getVtxos: vi.fn().mockResolvedValue(standardVtxos),
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      // No refresh or consolidation events after wrapping
+      const refreshEvents = events.filter(e => e.type.includes('refresh'));
+      const consolidationEvents = events.filter(e => e.type.includes('consolidation'));
+      expect(refreshEvents).toHaveLength(0);
+      expect(consolidationEvents).toHaveLength(0);
+    });
+
+    it('with covenantConfig: expiring covenant VTXOs trigger covenant refresh', async () => {
+      const now = Date.now();
+      const expiringCovVtxo = {
+        txid: 'cov-expiring',
+        vout: 0,
+        value: 5_000,
+        virtualStatus: { state: 'settled', batchExpiry: now + 60 * 60 * 1000 }, // 1 hour
+      };
+      const wallet = createCovenantMockWallet({
+        sdkWallet: {
+          indexerProvider: {
+            getVtxos: vi.fn().mockResolvedValue({ vtxos: [expiringCovVtxo] }),
+          },
+          arkProvider: {},
+        },
+      });
+      const events: RefreshEvent[] = [];
+      // Safety margin: 2 hours — so 1-hour-out VTXO is expiring
+      const config = { ...BASE_CONFIG, safetyMarginMs: 2 * 60 * 60 * 1000 };
+      const agent = new RefreshAgent(wallet, config, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      const covRefresh = events.filter(e => e.type === 'covenant_refresh_start');
+      expect(covRefresh).toHaveLength(1);
+    });
+
+    it('with covenantConfig: non-expiring covenant VTXOs do not trigger refresh', async () => {
+      const now = Date.now();
+      const safeCovVtxo = {
+        txid: 'cov-safe',
+        vout: 0,
+        value: 5_000,
+        virtualStatus: { state: 'settled', batchExpiry: now + 7 * 24 * 60 * 60 * 1000 }, // 7 days
+      };
+      const wallet = createCovenantMockWallet({
+        sdkWallet: {
+          indexerProvider: {
+            getVtxos: vi.fn().mockResolvedValue({ vtxos: [safeCovVtxo] }),
+          },
+          arkProvider: {},
+        },
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      const covRefresh = events.filter(e => e.type === 'covenant_refresh_start');
+      expect(covRefresh).toHaveLength(0);
+    });
+
+    it('with covenantConfig: covenant consolidation triggers on vtxo count', async () => {
+      const covVtxos = Array.from({ length: 12 }, (_, i) => ({
+        txid: `cov-${i}`,
+        vout: 0,
+        value: 5_000,
+        virtualStatus: { state: 'settled', batchExpiry: Date.now() + 7 * 24 * 60 * 60 * 1000 },
+      }));
+      const wallet = createCovenantMockWallet({
+        sdkWallet: {
+          indexerProvider: {
+            getVtxos: vi.fn().mockResolvedValue({ vtxos: covVtxos }),
+          },
+          arkProvider: {},
+        },
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      const covConsolidation = events.filter(e => e.type === 'covenant_consolidation_start');
+      expect(covConsolidation).toHaveLength(1);
+      if (covConsolidation[0]?.type === 'covenant_consolidation_start') {
+        expect(covConsolidation[0].vtxoCount).toBe(12);
+        expect(covConsolidation[0].totalSats).toBe(60_000);
+      }
+    });
+
+    it('with covenantConfig: errors in covenant path emit covenant_*_error events', async () => {
+      const standardVtxos = [fakeVtxo(10_000)];
+      const wallet = createCovenantMockWallet({
+        getVtxos: vi.fn().mockResolvedValue(standardVtxos),
+        settle: vi.fn().mockRejectedValue(new Error('settlement failed')),
+      });
+      const events: RefreshEvent[] = [];
+      const agent = new RefreshAgent(wallet, BASE_CONFIG, (e) => events.push(e), undefined, MOCK_COVENANT_CONFIG);
+
+      await agent.tick();
+
+      const wrapError = events.find(e => e.type === 'covenant_wrap_error');
+      expect(wrapError).toBeTruthy();
+      if (wrapError?.type === 'covenant_wrap_error') {
+        expect(wrapError.error).toBe('settlement failed');
+      }
+    });
+  });
 });
