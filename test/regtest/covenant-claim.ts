@@ -17,7 +17,8 @@
  *   npx tsx test/regtest/covenant-claim.ts
  */
 
-// EventSource polyfill — MUST be before Ark SDK imports
+// Polyfills — MUST be before Ark SDK imports
+import 'fake-indexeddb/auto';
 import { EventSource } from 'eventsource';
 Object.assign(globalThis, { EventSource });
 
@@ -83,6 +84,24 @@ function hash160(data: Uint8Array): Uint8Array {
 
 async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Mine a block every `intervalMs` while `fn` runs. Stops after fn resolves. */
+async function withBlockMining<T>(fn: () => Promise<T>, intervalMs = 8000): Promise<T> {
+  let mining = true;
+  const miner = (async () => {
+    while (mining) {
+      await sleep(intervalMs);
+      if (!mining) break;
+      try { mineBlocks(1); } catch {}
+    }
+  })();
+  try {
+    return await fn();
+  } finally {
+    mining = false;
+    await miner;
+  }
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -205,18 +224,31 @@ async function main() {
 
   log('Boarding funds into Ark...');
   const ramps = new Ramps(senderWallet);
+  // Mine 1 block to trigger a round, then onboard joins it.
+  // Use a single block mine with tight timing to avoid extra VtxoManager rounds.
+  mineBlocks(1);
   await ramps.onboard(info.fees, undefined, undefined, (event) => {
     log(`  Boarding: ${event.type ?? 'unknown'}`);
   });
-  mineBlocks(2);
-  await sleep(3000);
+  // Dispose immediately to stop VtxoManager from registering intents.
+  await senderWallet.dispose();
+  log('Boarding complete. Wallet disposed.');
 
-  const senderVtxos = await senderWallet.getVtxos();
-  if (senderVtxos.length === 0) throw new Error('Sender has no VTXOs after boarding');
-  log(`Sender VTXO: ${senderVtxos[0].value} sats`);
+  // Wait for arkd to clean up stale intents from the disposed wallet.
+  await sleep(8000);
 
-  log(`Sending ${FUND_AMOUNT} sats to covenant VHTLC...`);
-  const sendTxid = await senderWallet.sendBitcoin({ address: vhtlcAddress, amount: FUND_AMOUNT });
+  // Create fresh wallet — VtxoManager starts clean.
+  const senderWallet2 = await Wallet.create({
+    identity: sender,
+    arkServerUrl: ARK_URL,
+    esploraUrl: CHOPSTICKS_URL,
+    storage: new FileSystemStorageAdapter(mkdtempSync(join(tmpdir(), 'golem-sender2-'))),
+  });
+
+  // Send immediately before VtxoManager registers intents.
+  log(`Sending ${FUND_AMOUNT} sats to covenant VHTLC (OOR)...`);
+  const sendTxid = await senderWallet2.sendBitcoin({ address: vhtlcAddress, amount: FUND_AMOUNT });
+  await senderWallet2.dispose();
   log(`Send txid: ${sendTxid}`);
   mineBlocks(1);
   await sleep(3000);
@@ -259,6 +291,10 @@ async function main() {
   );
 
   log('Submitting claim to Introspector + arkd...');
+
+  // Use the full submitCovenantTx flow — the Introspector is the finalizer
+  // (its tweaked key is the last non-arkd signer in the closure), so it handles
+  // the complete pipeline internally: sign → submit to arkd → co-sign → finalize.
   const claimTxid = await submitCovenantTx({
     introspectorUrl: INTROSPECTOR_URL,
     arkTx: claimArkTx,
