@@ -224,9 +224,6 @@ async function main() {
 
   log('Boarding funds into Ark...');
   const ramps = new Ramps(senderWallet);
-  // Mine 1 block to trigger a round, then onboard joins it.
-  // Use a single block mine with tight timing to avoid extra VtxoManager rounds.
-  mineBlocks(1);
   await ramps.onboard(info.fees, undefined, undefined, (event) => {
     log(`  Boarding: ${event.type ?? 'unknown'}`);
   });
@@ -311,6 +308,7 @@ async function main() {
     scripts: [hex.encode(recipientVtxo.pkScript)],
     spendableOnly: true,
   });
+
   if (claimedResult.vtxos.length === 0) throw new Error('No claimed VTXOs found');
   const claimedVtxo = claimedResult.vtxos[0];
   log(`Claimed VTXO: ${claimedVtxo.txid}:${claimedVtxo.vout} (${claimedVtxo.value} sats)`);
@@ -357,6 +355,20 @@ async function main() {
   const { arkTx: refreshArkTx, checkpoints: refreshCheckpoints } = buildOffchainTx(
     [refreshInput], refreshOutputs, serverUnrollScript,
   );
+
+  // Set PrevArkTxField so the Introspector can resolve OP_INSPECTINPUTSCRIPTPUBKEY.
+  // The refresh script checks input[0].scriptPubKey == output[0].scriptPubKey (recursive covenant),
+  // which requires the previous transaction (the claim tx) to look up the input's prevout script.
+  // Key format: type=0xde, key="prevarktx", value=raw unsigned claim tx bytes.
+  refreshArkTx.updateInput(0, {
+    unknown: [
+      ...(refreshArkTx.getInput(0)?.unknown ?? []),
+      [
+        { type: 0xde, key: new TextEncoder().encode('prevarktx') },
+        claimArkTx.unsignedTx,
+      ],
+    ],
+  });
 
   log('Submitting refresh to Introspector + arkd...');
   const refreshTxid = await submitCovenantTx({

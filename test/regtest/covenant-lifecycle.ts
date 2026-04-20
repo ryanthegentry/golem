@@ -19,7 +19,8 @@
  *   npx tsx test/regtest/covenant-lifecycle.ts
  */
 
-// EventSource polyfill — MUST be before Ark SDK imports
+// Polyfills — MUST be before Ark SDK imports
+import 'fake-indexeddb/auto';
 import { EventSource } from 'eventsource';
 Object.assign(globalThis, { EventSource });
 
@@ -156,15 +157,24 @@ async function main() {
 
   log('Boarding funds into Ark...');
   const ramps = new Ramps(senderWallet);
+  mineBlocks(1);
   await ramps.onboard(info.fees, undefined, undefined, (event) => {
     log(`  Boarding: ${event.type ?? 'unknown'}`);
   });
-  mineBlocks(2);
-  await sleep(3000);
+  // Dispose immediately to stop VtxoManager from auto-registering intents with arkd.
+  await senderWallet.dispose();
+  log('Boarding complete. Wallet disposed.');
 
-  const senderVtxos = await senderWallet.getVtxos();
-  if (senderVtxos.length === 0) throw new Error('Sender has no VTXOs after boarding');
-  log(`Sender VTXO: ${senderVtxos[0].value} sats`);
+  // Wait for arkd to clean up stale intents from the disposed wallet.
+  await sleep(8000);
+
+  // Create fresh wallet — VtxoManager starts clean.
+  const senderWallet2 = await Wallet.create({
+    identity: sender,
+    arkServerUrl: ARK_URL,
+    esploraUrl: CHOPSTICKS_URL,
+    storage: new FileSystemStorageAdapter(mkdtempSync(join(tmpdir(), 'golem-lifecycle-sender2-'))),
+  });
 
   const indexerProvider = new RestIndexerProvider(ARK_URL);
 
@@ -220,11 +230,11 @@ async function main() {
 
   // ─── Send to BOTH VHTLCs ───────────────────────────────────────────────────
   log(`Sending ${FUND_AMOUNT} sats to VHTLC 1...`);
-  const sendTxid1 = await senderWallet.sendBitcoin({ address: vhtlcAddress1, amount: FUND_AMOUNT });
+  const sendTxid1 = await senderWallet2.sendBitcoin({ address: vhtlcAddress1, amount: FUND_AMOUNT });
   log(`VHTLC 1 txid: ${sendTxid1}`);
 
   log(`Sending ${FUND_AMOUNT} sats to VHTLC 2...`);
-  const sendTxid2 = await senderWallet.sendBitcoin({ address: vhtlcAddress2, amount: FUND_AMOUNT });
+  const sendTxid2 = await senderWallet2.sendBitcoin({ address: vhtlcAddress2, amount: FUND_AMOUNT });
   log(`VHTLC 2 txid: ${sendTxid2}`);
 
   mineBlocks(1);
@@ -329,6 +339,27 @@ async function main() {
   const { arkTx: consolidationArkTx, checkpoints: consolidationCheckpoints } = buildOffchainTx(
     consolidationInputs, consolidationOutputs, serverUnrollScript,
   );
+
+  // Set PrevArkTxField for each input so Introspector can resolve OP_INSPECTINPUTSCRIPTPUBKEY.
+  // Input 0 came from claim 1, input 1 from claim 2. Order matches claimedResult.vtxos.
+  const prevTxMap: Record<string, Transaction> = {
+    [claim1Txid]: claimArkTx1,
+    [claim2Txid]: claimArkTx2,
+  };
+  for (let i = 0; i < claimedResult.vtxos.length; i++) {
+    const prevTx = prevTxMap[claimedResult.vtxos[i].txid];
+    if (prevTx) {
+      consolidationArkTx.updateInput(i, {
+        unknown: [
+          ...(consolidationArkTx.getInput(i)?.unknown ?? []),
+          [
+            { type: 0xde, key: new TextEncoder().encode('prevarktx') },
+            prevTx.unsignedTx,
+          ],
+        ],
+      });
+    }
+  }
 
   log(`Consolidating ${claimedResult.vtxos.length} VTXOs (${totalValue} sats) → 1 VTXO...`);
   log(`  Inputs: ${consolidationInputs.length}`);
