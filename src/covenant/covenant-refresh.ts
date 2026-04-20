@@ -13,7 +13,7 @@ import { submitCovenantTx } from './introspector.js';
  * Single-input = refresh, multi-input = consolidation. Same code path.
  */
 export async function covenantRefresh(params: {
-  vtxos: Array<{ txid: string; vout: number; value: number }>;
+  vtxos: Array<{ txid: string; vout: number; value: number; prevTxBytes?: Uint8Array }>;
   vtxoScript: VtxoScript;
   refreshLeafScript: Uint8Array;
   refreshArkadeScript: Uint8Array;
@@ -51,6 +51,20 @@ export async function covenantRefresh(params: {
   ];
 
   const { arkTx, checkpoints } = buildOffchainTx(inputs, outputs, serverUnrollScript);
+
+  // Set PrevArkTxField for inputs that need OP_INSPECTINPUTSCRIPTPUBKEY resolution.
+  // The Introspector uses this to look up the input's previous output scriptPubKey.
+  const prevArkTxKey = new TextEncoder().encode('prevarktx');
+  for (let i = 0; i < vtxos.length; i++) {
+    if (vtxos[i].prevTxBytes) {
+      arkTx.updateInput(i, {
+        unknown: [
+          ...(arkTx.getInput(i)?.unknown ?? []),
+          [{ type: 0xde, key: prevArkTxKey }, vtxos[i].prevTxBytes!],
+        ],
+      });
+    }
+  }
 
   return submitCovenantTx({ introspectorUrl, arkTx, checkpoints, arkProvider });
 }

@@ -1,4 +1,4 @@
-import { hex, base64 } from '@scure/base';
+import { base64 } from '@scure/base';
 import type { ArkProvider } from '@arkade-os/sdk';
 import { Transaction } from '@arkade-os/sdk';
 
@@ -13,13 +13,15 @@ export async function submitIntrospectorTx(params: {
 }): Promise<{ signedArkTx: Uint8Array; signedCheckpoints: Uint8Array[] }> {
   const { introspectorUrl, arkTxPsbt, checkpointPsbts } = params;
 
+  const requestBody = {
+    ark_tx: base64.encode(arkTxPsbt),
+    checkpoint_txs: checkpointPsbts.map(cp => base64.encode(cp)),
+  };
+
   const resp = await fetch(`${introspectorUrl}/v1/tx`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ark_tx: base64.encode(arkTxPsbt),
-      checkpoint_txs: checkpointPsbts.map(cp => base64.encode(cp)),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   const text = await resp.text();
@@ -46,9 +48,7 @@ function countTapScriptSigs(tx: Transaction, inputIndex: number): number {
   const input = tx.getInput(inputIndex);
   const sigs = (input as any).tapScriptSig;
   if (!sigs) return 0;
-  // btc-signer stores tapScriptSig as array of tuples or iterable
   if (typeof sigs.length === 'number') return sigs.length;
-  // If it's an iterable (Map-like), count manually
   let count = 0;
   for (const _ of sigs) count++;
   return count;
@@ -101,11 +101,12 @@ export async function submitCovenantTx(params: {
     checkpointPsbts: unsignedCheckpointPsbts,
   });
 
+  // Check if the Introspector already finalized (acted as finalizer for arkd)
+  const finalized = wasFinalizerFlow(unsignedArkPsbt, signedArkTx);
+
   // 2. Relay to arkd for server signing.
-  //    The Introspector signs but may or may not act as finalizer internally.
-  //    We always relay to arkd ourselves — if already finalized, arkd returns
-  //    the existing txid. If not, arkd adds its signature.
-  console.log('[introspector] Submitting to arkd...');
+  //    We always attempt relay — if already finalized, arkd returns a duplicate
+  //    error and we fall back to the PSBT-derived txid.
   let arkTxid: string;
   let serverCheckpointTxs: string[];
 
@@ -116,14 +117,14 @@ export async function submitCovenantTx(params: {
     );
     arkTxid = result.arkTxid;
     serverCheckpointTxs = result.signedCheckpointTxs;
-    console.log(`[introspector] arkd accepted: ${arkTxid}`);
   } catch (submitErr: any) {
-    // If the Introspector already finalized (acted as finalizer), arkd may
-    // reject with INVALID_SIGNATURE or duplicate. Fall back to PSBT txid.
-    const finalTx = Transaction.fromPSBT(signedArkTx);
-    console.log(`[introspector] arkd submission failed (${submitErr.message}), checking if already finalized...`);
-    // The tx may already be finalized — return the PSBT-derived txid
-    return finalTx.id;
+    // If the Introspector already finalized, arkd rejects with duplicate.
+    // Fall back to PSBT-derived txid.
+    if (finalized) {
+      const finalTx = Transaction.fromPSBT(signedArkTx);
+      return finalTx.id;
+    }
+    throw submitErr;
   }
 
   // Co-sign server checkpoints with Introspector
@@ -136,6 +137,5 @@ export async function submitCovenantTx(params: {
 
   // Finalize
   await arkProvider.finalizeTx(arkTxid, fullySignedCheckpoints.map(cp => base64.encode(cp)));
-  console.log(`[introspector] Finalized: ${arkTxid}`);
   return arkTxid;
 }
