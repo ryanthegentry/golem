@@ -11,6 +11,11 @@ import { createSQLExecutor } from '../storage/sqlite-executor.js';
 export type { GolemLightningConfig } from './config.js';
 export { lightningConfigFromNetwork } from './config.js';
 export { ArkadeSwaps } from '@arkade-os/boltz-swap';
+export { subscribeCovenantClaims } from './covenant-claim-subscription.js';
+export type {
+  CovenantRecipeProvider,
+  SubscribeCovenantClaimsOptions,
+} from './covenant-claim-subscription.js';
 
 /** Terminal Boltz swap statuses — these swaps will never change state again. */
 const TERMINAL_STATUSES = [

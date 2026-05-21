@@ -1,6 +1,12 @@
 import { hex } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { ripemd160 } from '@noble/hashes/legacy.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
+
+/** Bitcoin HASH160: RIPEMD160(SHA256(x)). 20-byte output. */
+export function hash160(data: Uint8Array): Uint8Array {
+  return ripemd160(sha256(data));
+}
 
 /** BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg) */
 export function taggedHash(tag: string, data: Uint8Array): Uint8Array {

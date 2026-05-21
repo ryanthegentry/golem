@@ -1,8 +1,30 @@
 import { describe, it, expect, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { hex } from '@scure/base';
 import { VtxoScript } from '@arkade-os/sdk';
 import { buildCovenantVtxo } from './vtxo.js';
-import { covenantRefresh } from './covenant-refresh.js';
+import { covenantRefresh, resolvePrevTxBytes } from './covenant-refresh.js';
+import { CovenantClaimsRepo } from '../storage/covenant-claims-repo.js';
+
+// Mock arkTx that captures updateInput/getInput calls so we can assert what
+// PrevArkTx fields were set by covenantRefresh's per-input resolution.
+function makeMockArkTx() {
+  const inputs: Array<{ unknown?: Array<[{ type: number; key: Uint8Array }, Uint8Array]> }> = [];
+  return {
+    toPSBT: () => new Uint8Array(10),
+    getInput(i: number) {
+      if (!inputs[i]) inputs[i] = {};
+      return inputs[i];
+    },
+    updateInput(i: number, patch: any) {
+      if (!inputs[i]) inputs[i] = {};
+      Object.assign(inputs[i], patch);
+    },
+    _capturedInputs: inputs,
+  };
+}
 
 // We mock the SDK's buildOffchainTx and our submitCovenantTx
 vi.mock('@arkade-os/sdk', async (importOriginal) => {
@@ -149,5 +171,170 @@ describe('covenantRefresh', () => {
     });
 
     expect(txid).toBe('mock-covenant-txid');
+  });
+});
+
+describe('resolvePrevTxBytes', () => {
+  function mkRepo(): { repo: CovenantClaimsRepo; dir: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-cr-'));
+    return { repo: new CovenantClaimsRepo(path.join(dir, 'c.db')), dir };
+  }
+
+  const OP = 'aa'.repeat(32) + ':0';
+
+  it('inline bytes win over repo bytes', () => {
+    const { repo, dir } = mkRepo();
+    try {
+      repo.recordClaim(OP, new Uint8Array([0xbb]));
+      const got = resolvePrevTxBytes(new Uint8Array([0xaa]), OP, repo);
+      expect(Array.from(got!)).toEqual([0xaa]);
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns inline bytes when no repo provided', () => {
+    const got = resolvePrevTxBytes(new Uint8Array([0xaa]), OP, undefined);
+    expect(Array.from(got!)).toEqual([0xaa]);
+  });
+
+  it('falls back to repo bytes when inline is absent', () => {
+    const { repo, dir } = mkRepo();
+    try {
+      repo.recordClaim(OP, new Uint8Array([0xcc, 0xdd]));
+      const got = resolvePrevTxBytes(undefined, OP, repo);
+      expect(Array.from(got!)).toEqual([0xcc, 0xdd]);
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined when inline absent + no repo (legacy behavior preserved)', () => {
+    const got = resolvePrevTxBytes(undefined, OP, undefined);
+    expect(got).toBeUndefined();
+  });
+
+  it('throws when repo provided but neither inline nor repo has the outpoint', () => {
+    const { repo, dir } = mkRepo();
+    try {
+      expect(() => resolvePrevTxBytes(undefined, OP, repo)).toThrow(/prevTxBytes/i);
+      expect(() => resolvePrevTxBytes(undefined, OP, repo)).toThrow(new RegExp(OP));
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('covenantRefresh with claimsRepo', () => {
+  it('uses repo prevTxBytes when inline is absent', async () => {
+    // Replace the buildOffchainTx mock so we can capture which arkTx fields get set.
+    const { buildOffchainTx } = await import('@arkade-os/sdk');
+    const mockTx = makeMockArkTx();
+    vi.mocked(buildOffchainTx).mockReturnValueOnce({
+      arkTx: mockTx as any,
+      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-cr-'));
+    const repo = new CovenantClaimsRepo(path.join(dir, 'c.db'));
+    try {
+      const outpoint = 'cafe' + ':0';
+      const prev = new Uint8Array([0xfa, 0xce]);
+      repo.recordClaim(outpoint, prev);
+
+      await covenantRefresh({
+        vtxos: [{ txid: 'cafe', vout: 0, value: 5_000 }],
+        vtxoScript: covenantResult.vtxoScript,
+        refreshLeafScript: covenantResult.refreshLeafScript,
+        refreshArkadeScript: covenantResult.refreshArkadeScript,
+        serverUnrollScript: mockServerUnrollScript,
+        introspectorUrl: 'http://localhost:7073',
+        arkProvider: mockArkProvider,
+        claimsRepo: repo,
+      });
+
+      const captured = mockTx._capturedInputs[0];
+      expect(captured?.unknown).toBeDefined();
+      const tlv = captured!.unknown!.find(
+        ([k]) => k.type === 0xde && new TextDecoder().decode(k.key) === 'prevarktx',
+      );
+      expect(tlv).toBeDefined();
+      expect(Array.from(tlv![1])).toEqual([0xfa, 0xce]);
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('inline prevTxBytes still wins when claimsRepo is also provided', async () => {
+    const { buildOffchainTx } = await import('@arkade-os/sdk');
+    const mockTx = makeMockArkTx();
+    vi.mocked(buildOffchainTx).mockReturnValueOnce({
+      arkTx: mockTx as any,
+      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-cr-'));
+    const repo = new CovenantClaimsRepo(path.join(dir, 'c.db'));
+    try {
+      const outpoint = 'beef' + ':0';
+      repo.recordClaim(outpoint, new Uint8Array([0xaa])); // repo has 0xaa
+
+      await covenantRefresh({
+        vtxos: [{
+          txid: 'beef',
+          vout: 0,
+          value: 5_000,
+          prevTxBytes: new Uint8Array([0xbb]), // inline has 0xbb — should win
+        }],
+        vtxoScript: covenantResult.vtxoScript,
+        refreshLeafScript: covenantResult.refreshLeafScript,
+        refreshArkadeScript: covenantResult.refreshArkadeScript,
+        serverUnrollScript: mockServerUnrollScript,
+        introspectorUrl: 'http://localhost:7073',
+        arkProvider: mockArkProvider,
+        claimsRepo: repo,
+      });
+
+      const tlv = mockTx._capturedInputs[0]!.unknown!.find(
+        ([k]) => k.type === 0xde && new TextDecoder().decode(k.key) === 'prevarktx',
+      );
+      expect(Array.from(tlv![1])).toEqual([0xbb]); // inline wins
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when claimsRepo provided but vtxo lookup misses', async () => {
+    const { buildOffchainTx } = await import('@arkade-os/sdk');
+    const mockTx = makeMockArkTx();
+    vi.mocked(buildOffchainTx).mockReturnValueOnce({
+      arkTx: mockTx as any,
+      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-cr-'));
+    const repo = new CovenantClaimsRepo(path.join(dir, 'c.db'));
+    try {
+      await expect(
+        covenantRefresh({
+          vtxos: [{ txid: 'deed', vout: 0, value: 5_000 }],
+          vtxoScript: covenantResult.vtxoScript,
+          refreshLeafScript: covenantResult.refreshLeafScript,
+          refreshArkadeScript: covenantResult.refreshArkadeScript,
+          serverUnrollScript: mockServerUnrollScript,
+          introspectorUrl: 'http://localhost:7073',
+          arkProvider: mockArkProvider,
+          claimsRepo: repo,
+        }),
+      ).rejects.toThrow(/prevTxBytes/i);
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

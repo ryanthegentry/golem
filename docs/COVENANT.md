@@ -317,3 +317,62 @@ If Pika is a Nostr-based encrypted messaging client for AI agents:
 - Stablecoins: Fuji (BTC-backed) shipping in weeks. Close with USDT0 team. Taproot Assets supported.
 - Boltz Arkade gateway: 333-sat mainnet minimums (enables micropayments)
 - 1-minute round sessions on mainnet
+
+---
+
+## Phase 1.5 Receiver Implementation (2026-05)
+
+Path B (covenant-VHTLC delivery via Boltz) is upstream-blocked, but the **receiver-side** machinery to consume it is built and proven on regtest against an external sender. This section documents what landed and where Boltz integration will plug in.
+
+### Wire format — ratified
+
+Three independent implementations converge on the same NonInteractiveClaim covenant leaf:
+
+- [`ArkLabsHQ/fulmine#411`](https://github.com/ArkLabsHQ/fulmine/pull/411) — `pkg/vhtlc/noninteractive.go::enforcePayTo`
+- [`arkade-os/ts-sdk#396`](https://github.com/arkade-os/ts-sdk/pull/396) — CovVHTLC
+- Golem `src/covenant/vhtlc-detection.ts::buildNonInteractiveClaimArkadeScript`
+
+The arkade enforcement script (43 bytes):
+
+```
+OP_PUSHCURRENTINPUTINDEX OP_DUP                  // 0xcd 0x76
+OP_INSPECTOUTPUTSCRIPTPUBKEY OP_1 OP_EQUALVERIFY  // 0xd1 0x51 0x88
+<32-byte witness program>                         // 0x20 ...
+OP_EQUALVERIFY                                    // 0x88
+OP_INSPECTOUTPUTVALUE                             // 0xcf
+OP_PUSHCURRENTINPUTINDEX OP_INSPECTINPUTVALUE     // 0xcd 0xc9
+OP_GREATERTHANOREQUAL                             // 0xa2
+```
+
+The leaf closure: `ConditionMultisig([serverPubKey, introspectorTweakedKey])` with `Condition = HASH160(preimage) EQUAL`. `introspectorTweakedKey = introspectorBasePubKey + ArkadeScriptHash(enforcePayTo) * G`.
+
+### New modules (this dispatch)
+
+| Module | Purpose |
+|--------|---------|
+| `src/covenant/vhtlc-detection.ts` | Detects a covenant claim leaf in an incoming VHTLC's taproot tree by reconstructing the expected leaf bytes from a recipe (server PK, introspector PK, our receive pkScript, preimage hash) and comparing byte-for-byte. |
+| `src/covenant/claim-handler.ts` | `CovenantClaimHandler.processVHTLC(...)` — orchestrates detection, claim tx construction, Introspector co-sign via `submitCovenantTx`, and `prevTxBytes` persistence. |
+| `src/storage/covenant-claims-repo.ts` | SQLite-backed `CovenantClaimsRepo` — stores `(vtxoOutpoint, prevTxBytes, claimStatus, claimedAt, refreshedAt)`. Separate DB file from the SDK-owned `boltz-swaps.db`. |
+| `src/covenant/covenant-refresh.ts` (modified) | Added optional `claimsRepo` param + `resolvePrevTxBytes` helper. Per-input precedence: inline > repo > throw-if-repo-supplied > undefined. |
+| `src/lightning/covenant-claim-subscription.ts` | `subscribeCovenantClaims` — wires `ArkadeSwaps.onSwapUpdate` to a caller-supplied `recipeProvider` and the `CovenantClaimHandler`. Dead-on-arrival in production today (recipeProvider returns null for standard VHTLCs); the single integration point when Boltz ships. |
+
+### End-to-end proof (regtest)
+
+`test/regtest/covenant-receive-e2e.ts` runs the full loop:
+
+1. Fulmine (PR #411) creates a `NonInteractiveClaim` VHTLC pinned to Golem's covenant receive pkScript.
+2. A Golem-built sender funds the VHTLC.
+3. `CovenantClaimHandler.processVHTLC` self-solves the claim via the Introspector.
+4. `CovenantClaimsRepo` persists `prevTxBytes` keyed by the resulting VTXO outpoint.
+5. `covenantRefresh` reads `prevTxBytes` back from the repo and refreshes the VTXO.
+
+The reconstructed 7-leaf VtxoScript (6 from Fulmine's `swap_tree` + 1 covenant leaf we build locally) reproduces Fulmine's bech32 address byte-for-byte — the strongest possible cross-implementation check.
+
+### What's still upstream-blocked
+
+See `docs/PHASE-1.5-LIMITS.md` for the full enumeration. Headlines:
+- `@arkade-os/boltz-swap` has no surface to pass NonInteractiveClaim params to Boltz.
+- `ArkadeSwaps.enableAutoActions = true` will conflict with the covenant handler when Boltz starts shipping covenant VHTLCs (resolution deferred until then).
+- Mainnet Introspector deployment is Ark Labs maintainer-gated.
+
+When Boltz ships Path B, the Day-0 integration is a recipeProvider implementation + auto-claim conflict resolution. Every other piece is built, tested, and waiting.

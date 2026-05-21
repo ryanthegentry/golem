@@ -1,0 +1,76 @@
+# Golem-owned compose override for regtest.
+# Layers on top of /tmp/introspector/docker-compose.regtest.yml and adds:
+#   - nbxplorer healthcheck gate for arkd-wallet (race fix from 2026-04-20)
+#   - fulmine (built from /tmp/fulmine at PR #411 commit) — sender for covenant VHTLC E2E
+#   - bancod (ghcr.io/arkade-os/bancod:v0.0.1-rc.5) — referenced by PR #411's e2e test,
+#     not used by Golem in production (Golem self-solves), but required for Fulmine
+#     test infrastructure parity
+#
+# Pin:  ArkLabsHQ/fulmine PR #411 HEAD = 01c72a5b7e00b6b149c7cea995cea002b45835d2
+# Deps: arkade-os/go-sdk PR #182 (163178c642ed)
+#       arkade-os/arkd  PR #1068 (ae820b3a4d71)
+# Both deps pinned via go.mod pseudo-versions in /tmp/fulmine/go.mod — `go mod download`
+# fetches them directly from github branches, no replace directives needed.
+#
+# If louisinger force-pushes PR #411, repin the commit SHA below and re-run setup.sh.
+
+services:
+  nbxplorer:
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /datadir/btc_fully_synched"]
+      interval: 3s
+      timeout: 2s
+      retries: 60
+      start_period: 10s
+  arkd-wallet:
+    depends_on:
+      nbxplorer:
+        condition: service_healthy
+
+  bancod:
+    container_name: bancod
+    image: ghcr.io/arkade-os/bancod:v0.0.1-rc.5
+    restart: unless-stopped
+    depends_on:
+      - arkd
+      - introspector
+    environment:
+      - BANCOD_ARK_URL=arkd:7070
+      - BANCOD_INTROSPECTOR_URL=introspector:7073
+      - BANCOD_WALLET_SEED=ed1f6ad1c0aa1bbdcc14a4dc26ff5d31cca6df11617f2bbb24a4e0e6f72f7a5d
+      - BANCOD_WALLET_PASSWORD=password
+      - BANCOD_GRPC_PORT=7070
+      - BANCOD_HTTP_PORT=7071
+      - BANCOD_LOG_LEVEL=5
+      - BANCOD_BANCO_ENABLED=false
+      - BANCOD_PREIMAGE_ENABLED=true
+    ports:
+      - "7270:7070"
+      - "7271:7071"
+    volumes:
+      - type: tmpfs
+        target: /app/data
+
+  fulmine:
+    container_name: fulmine
+    build:
+      context: /tmp/fulmine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - arkd
+      - bancod
+    environment:
+      - FULMINE_ARK_SERVER=arkd:7070
+      - FULMINE_ESPLORA_URL=http://chopsticks:3000
+      - FULMINE_NO_MACAROONS=true
+      - FULMINE_LOG_LEVEL=5
+      - FULMINE_DISABLE_TELEMETRY=true
+      - FULMINE_SWAP_TIMEOUT=120
+      - FULMINE_SCHEDULER_POLL_INTERVAL=10
+    ports:
+      - "7000:7000"
+      - "7001:7001"
+    volumes:
+      - type: tmpfs
+        target: /app/data
