@@ -123,14 +123,20 @@ export class CovenantClaimHandler {
 
     const { arkTx, checkpoints } = buildOffchainTx([claimInput], claimOutputs, serverUnrollScript);
 
-    // 2b. Inject the preimage into each checkpoint's ConditionWitness PSBT
-    //     field. Fulmine's NonInteractiveClaim leaf is a ConditionMultisigTapscript
-    //     (HASH160 <preimage> EQUAL + multisig). arkd's verifyNonArkdCheckpointSignatures
-    //     (pkg/ark-lib/script/verify.go) reads the condition witness from PSBT
-    //     unknown field key `[222, "condition"]` and runs the conditionScript
-    //     against it before verifying the multisig sigs. Without this, the
-    //     conditionScript pops from an empty stack and we get "index 0 is
-    //     invalid for stack size 0".
+    // 2b. Inject the preimage into the ConditionWitness PSBT field on BOTH the
+    //     ark tx and the checkpoint. The SDK's buildOffchainTx propagates the
+    //     full ConditionMultisigTapscript bytes (HASH160 <preimage> EQUAL +
+    //     multisig) from the VHTLC's covenant leaf into the checkpoint's
+    //     collaborative spend leaf, so the ark tx that spends the checkpoint
+    //     inherits the same wrapper. arkd's verifyTapscriptPartialSigs and
+    //     verifyNonArkdCheckpointSignatures (pkg/ark-lib/script/verify.go +
+    //     internal/infrastructure/tx-builder/covenantless/builder.go) read the
+    //     witness from PSBT unknown field key `[222, "condition"]` and run the
+    //     conditionScript against it before verifying the multisig sigs. Any
+    //     failure (missing field, empty stack) gets wrapped as
+    //     `INVALID_SIGNATURE in ark tx`. Mirrors bancod's BuildClaim
+    //     (arkade-os/bancod:pkg/preimage/claim.go) which sets the field on both.
+    setConditionWitness(arkTx, 0, [preimage]);
     setConditionWitness(checkpoints[0], 0, [preimage]);
 
     // 3. Capture prevTxBytes BEFORE submission. The bytes don't change during

@@ -302,7 +302,7 @@ async function main() {
 
     // 14. Refresh v1 alone — exercises repo-backed prevTxBytes lookup.
     log('──── Refresh v1 (single-input, repo-backed prevTxBytes) ────');
-    const refreshTxid1 = await covenantRefresh({
+    const { txid: refreshTxid1, prevTxBytes: refreshedV1Bytes } = await covenantRefresh({
       vtxos: [{ txid: v1.txid, vout: v1.vout, value: v1.value }],
       vtxoScript: receiver.vtxoScript,
       refreshLeafScript: receiver.refreshLeafScript,
@@ -320,27 +320,122 @@ async function main() {
       scripts: [hex.encode(receiver.vtxoScript.pkScript)],
       spendableOnly: true,
     });
-    if (!post1.vtxos.some(v => v.txid === refreshTxid1)) bail('refreshed VTXO not observed');
-    log(`  Refreshed VTXO observed ✓`);
+    const refreshedV1 = post1.vtxos.find(v => v.txid === refreshTxid1);
+    if (!refreshedV1) bail('refreshed VTXO not observed');
+    log(`  Refreshed VTXO observed ✓ (${refreshedV1.txid}:${refreshedV1.vout}, ${refreshedV1.value} sats)`);
 
-    // 15. Consolidate the refreshed v1 with v2.
-    //     The refreshed v1's prevTxBytes are NOT in the repo (the refresh tx itself
-    //     wasn't recorded — that's not the handler's job, only the claim path
-    //     persists). So consolidation must supply v1's bytes inline. v2 still uses
-    //     repo lookup. This exercises the resolution-precedence path.
-    log('──── Consolidation (mixed inline + repo) ────');
-    // For inline bytes we'd need the refresh tx's unsigned bytes; in a real
-    // production wiring you'd record refreshes too. For the E2E we re-fetch the
-    // refreshed VTXO and use its raw tx bytes via the indexer's virtual tx API.
-    const virtualResp = await fetch(`${ARK_URL}/v1/explorer/${refreshTxid1}`).then(r => r.text()).catch(() => '');
-    if (!virtualResp) {
-      log(`  (Refreshed-tx bytes unreachable on this regtest; consolidation skipped)`);
-      log('=== PASS — claim + refresh proven; consolidation skipped (regtest limitation) ===');
-      return;
+    // 15. Consolidate (refreshed v1) with v2 — mixed inline + repo prevTxBytes.
+    //     refreshedV1 is NOT in the repo (only the original claim path persists);
+    //     covenantRefresh handed us its unsigned arkTx bytes for exactly this
+    //     case. v2 is still in the repo from the claim step. This exercises the
+    //     prevTxBytes resolution-precedence (inline wins; otherwise repo).
+    log('──── Consolidation #1 (refreshedV1 inline + v2 repo) ────');
+    const { txid: consTxid1, prevTxBytes: cons1Bytes } = await covenantRefresh({
+      vtxos: [
+        { txid: refreshedV1.txid, vout: refreshedV1.vout, value: refreshedV1.value, prevTxBytes: refreshedV1Bytes },
+        { txid: v2.txid, vout: v2.vout, value: v2.value },
+      ],
+      vtxoScript: receiver.vtxoScript,
+      refreshLeafScript: receiver.refreshLeafScript,
+      refreshArkadeScript: receiver.refreshArkadeScript,
+      serverUnrollScript,
+      introspectorUrl: INTROSPECTOR_URL,
+      arkProvider,
+      claimsRepo,
+    });
+    log(`  Consolidation #1 txid: ${consTxid1}`);
+    mineBlocks(1);
+    await sleep(2000);
+    const postCons1 = await indexerProvider.getVtxos({
+      scripts: [hex.encode(receiver.vtxoScript.pkScript)],
+      spendableOnly: true,
+    });
+    const cons1 = postCons1.vtxos.find(v => v.txid === consTxid1);
+    if (!cons1) bail('consolidated VTXO #1 not observed');
+    const expectedConsAmount = refreshedV1.value + v2.value;
+    if (cons1.value !== expectedConsAmount) {
+      bail(`consolidated VTXO value ${cons1.value} != sum of inputs ${expectedConsAmount}`);
+    }
+    log(`  Consolidated VTXO #1 observed ✓ (${cons1.value} sats = ${refreshedV1.value} + ${v2.value})`);
+    // The 2 input VTXOs must NOT still be spendable (arkd consumed them).
+    if (postCons1.vtxos.some(v => v.txid === refreshedV1.txid && v.vout === refreshedV1.vout)) {
+      bail('refreshedV1 still spendable after consolidation — arkd did not consume it');
+    }
+    if (postCons1.vtxos.some(v => v.txid === v2.txid && v.vout === v2.vout)) {
+      bail('v2 still spendable after consolidation — arkd did not consume it');
+    }
+    log(`  Input VTXOs no longer spendable ✓`);
+
+    // 16. Refresh the consolidated VTXO. Proves a consolidated VTXO behaves like
+    //     any other covenant VTXO. cons1 isn't in the repo either, so pass inline.
+    log('──── Refresh consolidated VTXO (single-input, inline prevTxBytes) ────');
+    const { txid: refreshConsTxid, prevTxBytes: cons1RefreshedBytes } = await covenantRefresh({
+      vtxos: [{ txid: cons1.txid, vout: cons1.vout, value: cons1.value, prevTxBytes: cons1Bytes }],
+      vtxoScript: receiver.vtxoScript,
+      refreshLeafScript: receiver.refreshLeafScript,
+      refreshArkadeScript: receiver.refreshArkadeScript,
+      serverUnrollScript,
+      introspectorUrl: INTROSPECTOR_URL,
+      arkProvider,
+      claimsRepo,
+    });
+    log(`  Refresh-of-consolidated txid: ${refreshConsTxid}`);
+    mineBlocks(1);
+    await sleep(2000);
+    const postRefreshCons = await indexerProvider.getVtxos({
+      scripts: [hex.encode(receiver.vtxoScript.pkScript)],
+      spendableOnly: true,
+    });
+    const cons1Refreshed = postRefreshCons.vtxos.find(v => v.txid === refreshConsTxid);
+    if (!cons1Refreshed) bail('refresh-of-consolidated VTXO not observed');
+    if (cons1Refreshed.value !== cons1.value) {
+      bail(`refresh-of-consolidated value ${cons1Refreshed.value} != original ${cons1.value}`);
+    }
+    log(`  Refresh-of-consolidated observed ✓ (${cons1Refreshed.value} sats preserved)`);
+
+    // 17. Pull in a fresh claim and re-consolidate. Proves a (refreshed,
+    //     previously-consolidated) VTXO can be consolidated again, this time
+    //     against a fresh claim still living in the repo.
+    log('──── Claim #3 ────');
+    const v3 = await processOneClaim('Claim #3');
+
+    log('──── Consolidation #2 (refreshed-consolidated inline + v3 repo) ────');
+    const { txid: consTxid2 } = await covenantRefresh({
+      vtxos: [
+        { txid: cons1Refreshed.txid, vout: cons1Refreshed.vout, value: cons1Refreshed.value, prevTxBytes: cons1RefreshedBytes },
+        { txid: v3.txid, vout: v3.vout, value: v3.value },
+      ],
+      vtxoScript: receiver.vtxoScript,
+      refreshLeafScript: receiver.refreshLeafScript,
+      refreshArkadeScript: receiver.refreshArkadeScript,
+      serverUnrollScript,
+      introspectorUrl: INTROSPECTOR_URL,
+      arkProvider,
+      claimsRepo,
+    });
+    log(`  Consolidation #2 txid: ${consTxid2}`);
+    mineBlocks(1);
+    await sleep(2000);
+    const postCons2 = await indexerProvider.getVtxos({
+      scripts: [hex.encode(receiver.vtxoScript.pkScript)],
+      spendableOnly: true,
+    });
+    const cons2 = postCons2.vtxos.find(v => v.txid === consTxid2);
+    if (!cons2) bail('consolidated VTXO #2 not observed');
+    const expectedCons2Amount = cons1Refreshed.value + v3.value;
+    if (cons2.value !== expectedCons2Amount) {
+      bail(`consolidated VTXO #2 value ${cons2.value} != ${expectedCons2Amount}`);
+    }
+    log(`  Consolidated VTXO #2 observed ✓ (${cons2.value} sats = ${cons1Refreshed.value} + ${v3.value})`);
+    // Only the doubly-consolidated VTXO should remain spendable at the receiver address.
+    const spendableAtReceiver = postCons2.vtxos.filter(v => v.value > 0);
+    log(`  Spendable VTXOs at receiver after lifecycle: ${spendableAtReceiver.length}`);
+    if (!spendableAtReceiver.some(v => v.txid === consTxid2)) {
+      bail('consolidated VTXO #2 missing from spendable set');
     }
 
-    // 16. Final tally.
-    log('=== PASS — Fulmine VHTLC → Golem covenant claim → refresh proven end-to-end ===');
+    // 18. Final tally.
+    log('=== PASS — claim + refresh + consolidate + refresh-of-consolidate + re-consolidate proven end-to-end ===');
   } finally {
     claimsRepo.close();
     rmSync(dataDir, { recursive: true, force: true });

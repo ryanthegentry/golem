@@ -39,6 +39,11 @@ export function resolvePrevTxBytes(
  * Per-input prevTxBytes are required for OP_INSPECTINPUTSCRIPTPUBKEY (PR #63). They
  * can be supplied inline on each vtxo (regtest pattern) or fetched from a
  * `CovenantClaimsRepo` written at claim time (production pattern).
+ *
+ * Returns the new VTXO's txid AND the unsigned arkTx bytes. The bytes are needed
+ * to chain a downstream refresh/consolidate against the resulting VTXO when the
+ * caller hasn't (yet) persisted them to a CovenantClaimsRepo — e.g. consolidating
+ * a previously-consolidated VTXO with a fresh claim.
  */
 export async function covenantRefresh(params: {
   vtxos: Array<{ txid: string; vout: number; value: number; prevTxBytes?: Uint8Array }>;
@@ -49,7 +54,7 @@ export async function covenantRefresh(params: {
   introspectorUrl: string;
   arkProvider: ArkProvider;
   claimsRepo?: CovenantClaimsRepo;
-}): Promise<string> {
+}): Promise<{ txid: string; prevTxBytes: Uint8Array }> {
   const {
     vtxos, vtxoScript, refreshLeafScript, refreshArkadeScript,
     serverUnrollScript, introspectorUrl, arkProvider, claimsRepo,
@@ -97,5 +102,10 @@ export async function covenantRefresh(params: {
     }
   }
 
-  return submitCovenantTx({ introspectorUrl, arkTx, checkpoints, arkProvider });
+  // Capture the unsigned arkTx bytes BEFORE submission. arkd only appends
+  // signatures during submission; the unsigned tx bytes don't change, so it's
+  // safe to snapshot here and hand back to callers for chained operations.
+  const prevTxBytes = new Uint8Array(arkTx.unsignedTx);
+  const txid = await submitCovenantTx({ introspectorUrl, arkTx, checkpoints, arkProvider });
+  return { txid, prevTxBytes };
 }

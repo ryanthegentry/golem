@@ -359,6 +359,66 @@ describe('CovenantClaimHandler.processVHTLC', () => {
     }
   });
 
+  it('sets ConditionWitness PSBT field on BOTH arkTx and checkpoint[0]', async () => {
+    // arkd's VerifyVtxoTapscriptSigs decodes the ark tx input's leaf as
+    // ConditionMultisigClosure (the SDK propagates the wrapped ConditionMultisigTapscript
+    // bytes from the VHTLC's covenant leaf into the checkpoint's collaborative spend
+    // leaf, so the ark tx that spends the checkpoint inherits the same wrapper).
+    // arkd then fetches the ConditionWitness PSBT field on the ark tx input,
+    // evaluates the conditionScript with that witness, and rejects the tx if the
+    // field is missing — surfaced as `INVALID_SIGNATURE in ark tx`. Mirror bancod's
+    // BuildClaim (arkade-os/bancod:pkg/preimage/claim.go) which sets the field on
+    // both arkTx and each checkpoint.
+    const { buildOffchainTx } = await import('@arkade-os/sdk');
+    const { submitCovenantTx } = await import('./introspector.js');
+
+    const arkTx = makeMockArkTx(7);
+    const checkpoint = makeMockArkTx(99);
+    vi.mocked(buildOffchainTx).mockReturnValue({
+      arkTx: arkTx as any,
+      checkpoints: [checkpoint as any],
+    });
+    vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-cw');
+
+    const { repo, dir } = mkRepo();
+    try {
+      const handler = new CovenantClaimHandler(repo);
+      const { tree, outpoint } = makeVhtlcWithCovenant();
+      await handler.processVHTLC({
+        vhtlc: { ...outpoint, tree },
+        preimage: PREIMAGE,
+        serverPubKey: SERVER_PK,
+        introspectorPubKey: INTROSPECTOR_PK,
+        receiverVtxoScript: receiverCovenant.vtxoScript,
+        serverUnrollScript: mockServerUnrollScript,
+        introspectorUrl: 'http://localhost:7073',
+        arkProvider: mockArkProvider,
+      });
+
+      const CONDITION_KEY_TYPE = 222;
+      const CONDITION_KEY = 'condition';
+      // encodeWitnessStack([preimage]) = varint(1) || varint(32) || preimage
+      const expectedWitness = new Uint8Array([0x01, 0x20, ...PREIMAGE]);
+
+      const assertHasConditionWitness = (tx: ReturnType<typeof makeMockArkTx>, label: string) => {
+        const input = tx.getInput(0);
+        expect(input.unknown, `${label} input 0 is missing the .unknown PSBT field array`).toBeDefined();
+        const match = (input.unknown as any[]).find(([k]) =>
+          k.type === CONDITION_KEY_TYPE &&
+          new TextDecoder().decode(k.key) === CONDITION_KEY,
+        );
+        expect(match, `${label} input 0 is missing the ConditionWitness PSBT field (key type 222, key "condition")`).toBeDefined();
+        expect(Array.from(match[1] as Uint8Array)).toEqual(Array.from(expectedWitness));
+      };
+
+      assertHasConditionWitness(checkpoint, 'checkpoint');
+      assertHasConditionWitness(arkTx, 'arkTx');
+    } finally {
+      repo.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('persistence failure does not mask the successful claim — returns claimed with persistError flag', async () => {
     const { buildOffchainTx } = await import('@arkade-os/sdk');
     const { submitCovenantTx } = await import('./introspector.js');

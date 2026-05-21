@@ -13,6 +13,7 @@ import { CovenantClaimsRepo } from '../storage/covenant-claims-repo.js';
 function makeMockArkTx() {
   const inputs: Array<{ unknown?: Array<[{ type: number; key: Uint8Array }, Uint8Array]> }> = [];
   return {
+    unsignedTx: new Uint8Array([0x01, 0x02, 0x03]),
     toPSBT: () => new Uint8Array(10),
     getInput(i: number) {
       if (!inputs[i]) inputs[i] = {};
@@ -32,7 +33,7 @@ vi.mock('@arkade-os/sdk', async (importOriginal) => {
   return {
     ...actual,
     buildOffchainTx: vi.fn().mockReturnValue({
-      arkTx: { toPSBT: () => new Uint8Array(10) },
+      arkTx: { unsignedTx: new Uint8Array([0x01]), toPSBT: () => new Uint8Array(10) },
       checkpoints: [{ toPSBT: () => new Uint8Array(5) }],
     }),
   };
@@ -68,7 +69,7 @@ describe('covenantRefresh', () => {
     const { buildOffchainTx } = await import('@arkade-os/sdk');
     const { submitCovenantTx } = await import('./introspector.js');
 
-    const txid = await covenantRefresh({
+    const { txid } = await covenantRefresh({
       vtxos: [{ txid: 'aabb', vout: 0, value: 10_000 }],
       vtxoScript: covenantResult.vtxoScript,
       refreshLeafScript: covenantResult.refreshLeafScript,
@@ -160,7 +161,7 @@ describe('covenantRefresh', () => {
   });
 
   it('returns txid from submitCovenantTx', async () => {
-    const txid = await covenantRefresh({
+    const { txid } = await covenantRefresh({
       vtxos: [{ txid: 'dd', vout: 0, value: 1_000 }],
       vtxoScript: covenantResult.vtxoScript,
       refreshLeafScript: covenantResult.refreshLeafScript,
@@ -171,6 +172,34 @@ describe('covenantRefresh', () => {
     });
 
     expect(txid).toBe('mock-covenant-txid');
+  });
+
+  it('returns prevTxBytes (the unsigned arkTx bytes) alongside the txid', async () => {
+    // The bytes are needed for downstream chained refresh/consolidate calls
+    // when the resulting VTXO is not (yet) recorded in CovenantClaimsRepo
+    // (e.g. consolidating a previously-consolidated VTXO with a fresh claim).
+    const { buildOffchainTx } = await import('@arkade-os/sdk');
+    const mockTx = makeMockArkTx();
+    // Plant deterministic unsignedTx bytes we can assert on.
+    (mockTx as any).unsignedTx = new Uint8Array([0xfa, 0xce, 0xbe, 0xef]);
+    vi.mocked(buildOffchainTx).mockReturnValueOnce({
+      arkTx: mockTx as any,
+      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+    });
+
+    const result = await covenantRefresh({
+      vtxos: [{ txid: 'ee', vout: 0, value: 1_000 }],
+      vtxoScript: covenantResult.vtxoScript,
+      refreshLeafScript: covenantResult.refreshLeafScript,
+      refreshArkadeScript: covenantResult.refreshArkadeScript,
+      serverUnrollScript: mockServerUnrollScript,
+      introspectorUrl: 'http://localhost:7073',
+      arkProvider: mockArkProvider,
+    });
+
+    expect(result.txid).toBe('mock-covenant-txid');
+    expect(result.prevTxBytes).toBeInstanceOf(Uint8Array);
+    expect(Array.from(result.prevTxBytes)).toEqual([0xfa, 0xce, 0xbe, 0xef]);
   });
 });
 

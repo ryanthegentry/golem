@@ -253,7 +253,7 @@ export class RefreshAgent {
         if (expiringCov.length > 0) {
           try {
             this.emit({ type: 'covenant_refresh_start', vtxoCount: expiringCov.length });
-            const txid = await covenantRefresh({
+            const { txid } = await covenantRefresh({
               vtxos: expiringCov,
               vtxoScript: this.covenantConfig.vtxoScript,
               refreshLeafScript: this.covenantConfig.refreshLeafScript,
@@ -310,7 +310,7 @@ export class RefreshAgent {
           vtxoCount: covenantVtxos.length,
           totalSats,
         });
-        const txid = await covenantRefresh({
+        const { txid } = await covenantRefresh({
           vtxos: covenantVtxos,
           vtxoScript: this.covenantConfig.vtxoScript,
           refreshLeafScript: this.covenantConfig.refreshLeafScript,

@@ -11,10 +11,12 @@ describe('402index registration', () => {
   });
 
   it('sends correct POST body to /api/v1/register', async () => {
+    // 402index returns the service in a wrapped envelope: { service: {...}, message }.
+    // register.ts:62 reads data.service?.id / data.service?.status accordingly.
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 201,
-      json: async () => ({ id: 'abc-123', status: 'pending', message: 'Registration received' }),
+      json: async () => ({ service: { id: 'abc-123', status: 'pending' }, message: 'Registration received' }),
     });
     vi.stubGlobal('fetch', mockFetch);
 
