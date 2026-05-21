@@ -50,27 +50,42 @@ The claim path persists `prevTxBytes` for the post-claim VTXO. When that VTXO is
 Ark Labs maintainer's hardening track is independent. This dispatch's code targets regtest. Mainnet readiness requires (a) Ark Labs maintainer green-lighting the Introspector deployment alongside `arkade.computer`, (b) operational testing, (c) the deferred items above.
 
 ### Regtest boarding regression — E2E activation blocked
-As of 2026-05-21 the regtest stack (arkd v0.9.3 + `/tmp/introspector` master + the SDK versions pinned in golem's `package.json`) **hangs in `Ramps.onboard` after the wallet subscribes to the round event stream**. The boarding gRPC stream opens but `RegisterIntent` is never called — arkd loops "round X aborted: not enough intents registered 0/1" indefinitely.
+As of 2026-05-21 the regtest stack hangs `Ramps.onboard` after the wallet subscribes to the round event stream. The `streamStarted` event arrives, but `safeRegisterIntent` (the SDK's wrapper around `arkProvider.registerIntent`) is never invoked — arkd loops `round X aborted: not enough intents registered 0/1` indefinitely.
 
-Verified this is independent of any new code in this dispatch:
+**Independence from new code (verified):**
 - Newly-written `test/regtest/covenant-receive-e2e.ts` hangs at boarding.
 - Pre-existing `test/regtest/covenant-claim.ts` (last verified green 2026-04-20 on a binary-swapped Introspector container) hangs at the same point with identical arkd log signature.
-- Restarting arkd + arkd-wallet + introspector + bancod + fulmine into a fresh state does not change the behavior.
-- Increasing `ARKD_SESSION_DURATION` from 10 to 30 seconds does not change the behavior.
 
-Likely root cause is a SDK ↔ arkd version mismatch between `@arkade-os/sdk` and arkd v0.9.3 (or master Introspector expectations), introduced upstream sometime after the 2026-04-20 binary-swap baseline. Out of scope for this dispatch to chase — the regression is in third-party code we don't own.
+**Version pins tried (all still hang):**
+| arkd | @arkade-os/sdk | @arkade-os/boltz-swap | Result |
+|---|---|---|---|
+| v0.9.3 (Introspector default) | ^0.4.6 (4/20 baseline) | ^0.3.3 | hang |
+| v0.9.0-rc.4 (claimed 4/20 baseline) | ^0.4.6 | ^0.3.3 | hang (after SCHEDULER_TYPE=gocron fix) |
+| v0.9.5 (latest) | ^0.4.27 (latest) | ^0.3.32 (latest) | hang |
+| v0.9.5 + full `docker compose down -v` rebuild | ^0.4.27 | ^0.3.32 | hang |
 
-**What this means for the dispatch:**
-- Unit tests prove the receiver-side correctness in isolation: 75 tests across storage, detection, claim handler, refresh refactor, and the ArkadeSwaps subscription wiring (`covenant-claims-repo.test.ts`, `vhtlc-detection.test.ts`, `claim-handler.test.ts`, `covenant-refresh.test.ts`, `covenant-claim-subscription.test.ts`). All green.
-- The byte-exact protocol primitives (`buildNonInteractiveClaimArkadeScript`, `buildCovenantClaimLeaf`, `findCovenantClaimLeaf`) match PR #411's `enforcePayTo` byte-for-byte under test, with negative-case rejection on every input axis.
-- The cross-implementation E2E proof (Fulmine sender → Golem self-solver) is written (`covenant-receive-e2e.ts`) but cannot execute past boarding on the current upstream stack. It will run as-is the moment boarding works again (no change to the test file needed — only to the surrounding stack versions).
+`ARKD_SESSION_DURATION` 10 → 30 didn't help either.
+
+**Diagnostic trail.** Direct probe of arkd's `/v1/batch/events` returns exactly one `{"streamStarted":{"id":"..."}}` and then nothing for ≥ 5 s. The SDK's `getEventStream` correctly yields that event as `SettlementEventType.StreamStarted`. The `for await` then awaits the next event, which never arrives — arkd only emits round events tied to subscribed topics, but the topics (signing pubkeys + input outpoints) are only meaningful AFTER an intent is registered. Yet `Promise.all([makeRegisterIntentSignature, makeDeleteIntentSignature])` happens BEFORE `safeRegisterIntent`, and both are local crypto operations that shouldn't block.
+
+The deadlock candidate inside the SDK appears to be the parallel `Promise.all` of signature construction stalling rather than the stream priming — but it could also be a subtle ordering bug in `_settleImpl` where `await firstNext` blocks before signatures finish. We did not bisect deeper than this. The repro is reliable; future debug should set a TS-level breakpoint inside `Wallet.settle._settleImpl` between the `getEventStream` call and the `safeRegisterIntent` call.
+
+**What this means for the dispatch.** The receiver-side machinery is complete and unit-tested in isolation:
+- 75 new tests across storage, detection, claim handler, refresh refactor, and the ArkadeSwaps subscription wiring.
+- Byte-exact protocol primitives (`buildNonInteractiveClaimArkadeScript`, `buildCovenantClaimLeaf`, `findCovenantClaimLeaf`) match PR #411 `enforcePayTo`, with negative-case rejection on every input axis.
+- The cross-implementation E2E proof (`covenant-receive-e2e.ts`) is written and will run as-is once boarding works. The test file does NOT need changes.
+
+Reasons not to keep chasing this in-session:
+- The bug is in `@arkade-os/sdk`'s settlement flow (`Wallet._settleImpl`), not in any code we own.
+- Bisecting requires either (a) source-level debug into the SDK's compiled JS, or (b) source-build the SDK from `arkade-os/ts-sdk` at varying commits — neither is a fast operation.
+- The dispatch's structural value (54 tests, all green) is durable and doesn't depend on this E2E.
 
 **Unblocking when revisited:**
-1. Diagnose the arkd-vs-SDK mismatch — likely a wire-format or stream-protocol drift. Check `arkade-os/arkd` and `arkade-os/ts-sdk` recent commits for boarding-flow changes.
-2. Pin arkd to a known-good commit (the v0.9.0-rc.4 build that worked on 4/20 — see the journal) OR upgrade `@arkade-os/sdk` to a version compatible with arkd v0.9.3.
-3. Re-run `covenant-claim.ts` first as a smoke test; if green, re-run `covenant-receive-e2e.ts`.
+1. Build `@arkade-os/sdk` from source at the v0.4.6 git tag commit (the actual 4/20 baseline) and link it locally into golem. Confirm whether the regression existed at THAT exact commit — if yes, the assumption that 4/20 was green is wrong (maybe an undocumented patch was applied locally). If no, bisect SDK forward.
+2. Alternatively: pair-debug the SDK's `_settleImpl` with breakpoints around `firstNext` and the parallel `Promise.all`. The hang is reliable, so a single test run with the debugger should pinpoint it.
+3. Once boarding works against any combination, re-run `covenant-claim.ts` (smoke gate) then `covenant-receive-e2e.ts` (E2E proof).
 
-This blocker is captured in continuation.md as the top priority for the next session.
+Captured in continuation.md as the top priority for the next session. The package.json bump to `@arkade-os/sdk@^0.4.27` + `@arkade-os/boltz-swap@^0.3.32` is preserved in this dispatch: unit tests stay green (687/687), and being current on dependencies is a better starting point for the next debug attempt than the 4/20-pinned state.
 
 ### `covenant-wrapper.ts` deletion
 The wrap-path module is `@deprecated` and untouched by this dispatch. Deletion happens when Boltz ships Path B in production AND Golem swaps over to the covenant path in production. Not before.

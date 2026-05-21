@@ -27,8 +27,8 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@arkade-os/boltz-swap": "^0.3.3",
-    "@arkade-os/sdk": "^0.4.6",
+    "@arkade-os/boltz-swap": "^0.3.32",
+    "@arkade-os/sdk": "^0.4.27",
     "@hono/node-server": "^1.19.9",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
