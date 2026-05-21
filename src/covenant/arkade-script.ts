@@ -4,27 +4,33 @@
  */
 
 /**
- * Build Arkade Script bytecode for covenant claim:
+ * Build Arkade Script bytecode for covenant claim. Matches Fulmine PR #411's
+ * enforcePayTo wire spec — uses BigInt-unified OP_GREATERTHANOREQUAL (0xa2)
+ * with output/input amounts read via OP_INSPECT*, no explicit amount push
+ * (was previously OP_GREATERTHANOREQUAL64 0xdf with LE64 push; removed by
+ * Introspector PR #69 "Unified BigInt Arithmetic").
+ *
  * 1. Verifies preimage hash (preimage provided via witness stack)
- * 2. Verifies output[0] pays to recipientWitnessProgram
- * 3. Verifies output[0] value >= minAmount
+ * 2. Verifies output[currentInputIndex] pays to recipientWitnessProgram (taproot v1)
+ * 3. Verifies output[currentInputIndex].value >= input[currentInputIndex].value
+ *
+ * The `minAmount` parameter is retained for backward compat with regtest
+ * call sites but is unused — the new invariant compares output >= input,
+ * which is strictly stronger than the previous fixed-threshold check.
  */
 export function buildClaimArkadeScript(
   preimageHash: Uint8Array,
   recipientWitnessProgram: Uint8Array,
-  minAmount: bigint,
+  _minAmount?: bigint,
 ): Uint8Array {
   if (preimageHash.length !== 20) throw new Error(`Expected 20-byte preimage hash, got ${preimageHash.length}`);
   if (recipientWitnessProgram.length !== 32) throw new Error(`Expected 32-byte witness program, got ${recipientWitnessProgram.length}`);
 
-  const amountLE = new Uint8Array(8);
-  new DataView(amountLE.buffer).setBigUint64(0, minAmount, true);
-
   return new Uint8Array([
-    0xa9, 0x14, ...preimageHash, 0x88,           // HASH160 <hash> EQUALVERIFY
-    0x00, 0xd1, 0x51, 0x88,                       // 0 INSPECTOUTPUTSCRIPTPUBKEY, 1 EQUALVERIFY
-    0x20, ...recipientWitnessProgram, 0x88,        // <32-byte WP> EQUALVERIFY
-    0x00, 0xcf, 0x08, ...amountLE, 0xdf,          // 0 INSPECTOUTPUTVALUE, <amount> GTE64
+    0xa9, 0x14, ...preimageHash, 0x88,                              // HASH160 <hash> EQUALVERIFY
+    0xcd, 0x76, 0xd1, 0x51, 0x88,                                   // INPUTINDEX DUP INSPECTOUTPUTSCRIPTPUBKEY 1 EQUALVERIFY
+    0x20, ...recipientWitnessProgram, 0x88,                          // <32-byte WP> EQUALVERIFY
+    0xcf, 0xcd, 0xc9, 0xa2,                                          // INSPECTOUTPUTVALUE INPUTINDEX INSPECTINPUTVALUE GREATERTHANOREQUAL
   ]);
 }
 

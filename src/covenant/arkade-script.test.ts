@@ -37,39 +37,41 @@ describe('buildClaimArkadeScript', () => {
     expect(() => buildClaimArkadeScript(hash, badWp, 1000n)).toThrow('Expected 32-byte');
   });
 
-  it('encodes minAmount as LE 8-byte', () => {
-    const hash = new Uint8Array(20).fill(0xab);
-    const wp = new Uint8Array(32).fill(0xcd);
-    const script = buildClaimArkadeScript(hash, wp, 10_000n);
-
-    // Find the amount bytes: after INSPECTOUTPUTVALUE opcode (0xcf), preceded by push8 (0x08)
-    // Script layout:
-    //   HASH160(a9) PUSH20(14) <20 bytes hash> EQUALVERIFY(88)     = 23 bytes
-    //   OP_0(00) INSPECTOUTPUTSCRIPTPUBKEY(d1) OP_1(51) EQUALVERIFY(88) = 4 bytes
-    //   PUSH32(20) <32 bytes WP> EQUALVERIFY(88)                    = 34 bytes
-    //   OP_0(00) INSPECTOUTPUTVALUE(cf) PUSH8(08) <8 bytes LE> GTE64(df) = 12 bytes
-    // Total: 73 bytes
-
-    // 10_000 in LE = 0x10, 0x27, 0x00, ...
-    const amountOffset = 23 + 4 + 34 + 3; // after OP_0 INSPECTOUTPUTVALUE PUSH8
-    const amountBytes = script.slice(amountOffset, amountOffset + 8);
-    const view = new DataView(amountBytes.buffer, amountBytes.byteOffset, 8);
-    expect(view.getBigUint64(0, true)).toBe(10_000n);
-  });
-
-  it('returns expected bytecode structure', () => {
+  it('returns expected bytecode structure (Fulmine enforcePayTo style, post-PR-#69)', () => {
     const hash = new Uint8Array(20).fill(0x11);
     const wp = new Uint8Array(32).fill(0x22);
-    const script = buildClaimArkadeScript(hash, wp, 500n);
+    const script = buildClaimArkadeScript(hash, wp);
 
-    // Verify structure markers
+    // Script layout:
+    //   HASH160(a9) PUSH20(14) <20 bytes hash> EQUALVERIFY(88)                              = 23 bytes
+    //   INPUTINDEX(cd) DUP(76) INSPECTOUTPUTSCRIPTPUBKEY(d1) OP_1(51) EQUALVERIFY(88)        = 5 bytes
+    //   PUSH32(20) <32 bytes WP> EQUALVERIFY(88)                                             = 34 bytes
+    //   INSPECTOUTPUTVALUE(cf) INPUTINDEX(cd) INSPECTINPUTVALUE(c9) GREATERTHANOREQUAL(a2)   = 4 bytes
+    // Total: 66 bytes
     expect(script[0]).toBe(0xa9); // OP_HASH160
     expect(script[1]).toBe(0x14); // PUSH20
     expect(script[22]).toBe(0x88); // EQUALVERIFY (after hash)
-    expect(script[23]).toBe(0x00); // OP_0
-    expect(script[24]).toBe(0xd1); // OP_INSPECTOUTPUTSCRIPTPUBKEY
-    expect(script[25]).toBe(0x51); // OP_1
-    expect(script[26]).toBe(0x88); // EQUALVERIFY
-    expect(script.length).toBe(73);
+    expect(script[23]).toBe(0xcd); // OP_PUSHCURRENTINPUTINDEX
+    expect(script[24]).toBe(0x76); // OP_DUP
+    expect(script[25]).toBe(0xd1); // OP_INSPECTOUTPUTSCRIPTPUBKEY
+    expect(script[26]).toBe(0x51); // OP_1
+    expect(script[27]).toBe(0x88); // EQUALVERIFY
+    expect(script[28]).toBe(0x20); // PUSH32
+    expect(script[61]).toBe(0x88); // EQUALVERIFY (after wp)
+    expect(script[62]).toBe(0xcf); // OP_INSPECTOUTPUTVALUE
+    expect(script[63]).toBe(0xcd); // OP_PUSHCURRENTINPUTINDEX
+    expect(script[64]).toBe(0xc9); // OP_INSPECTINPUTVALUE
+    expect(script[65]).toBe(0xa2); // OP_GREATERTHANOREQUAL (BigInt)
+    expect(script.length).toBe(66);
+  });
+
+  it('ignores minAmount param (kept for backward-compat with regtest call sites)', () => {
+    const hash = new Uint8Array(20).fill(0xab);
+    const wp = new Uint8Array(32).fill(0xcd);
+    const a = buildClaimArkadeScript(hash, wp);
+    const b = buildClaimArkadeScript(hash, wp, 10_000n);
+    const c = buildClaimArkadeScript(hash, wp, 99_999n);
+    expect(a).toEqual(b);
+    expect(a).toEqual(c);
   });
 });

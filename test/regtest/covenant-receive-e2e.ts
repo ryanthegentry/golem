@@ -52,7 +52,7 @@ import { CovenantClaimsRepo } from '../../src/storage/covenant-claims-repo.js';
 
 const ARK_URL = 'http://localhost:7070';
 const INTROSPECTOR_URL = 'http://localhost:7073';
-const FULMINE_REST = 'http://localhost:7001';
+const FULMINE_REST = 'http://localhost:7001/api';
 const CHOPSTICKS_URL = 'http://localhost:3000';
 const FUND_AMOUNT = 10_000;
 const BOARDING_AMOUNT = 0.001; // BTC
@@ -178,14 +178,15 @@ async function main() {
       // 6. Per-VHTLC keys. sender_pubkey = our sender's compressed pubkey; receiver_pubkey
       //    = alice's compressed pubkey (the participant in Golem's collab-spend leaf).
       //    Fulmine accepts compressed (33-byte) pubkeys per the proto.
-      const senderCompressed = await sender.signerSession().then(() => null).catch(() => null); // not used directly
       const aliceCompressedHex = '02' + hex.encode(alicePubkey);
       const senderCompressedHex = '02' + hex.encode(senderPubkey);
 
-      // 7. CreateVHTLC.
+      // 7. CreateVHTLC. Fulmine's API requires XOR(sender_pubkey, receiver_pubkey)
+      //    — caller provides the OTHER party's key and Fulmine derives its own.
+      //    Here Golem is the receiver (holds preimage + covenant claim leaf), so
+      //    Fulmine is the sender; we provide receiver_pubkey only.
       const createResp = await fulminePost('/v1/vhtlc', {
         preimage_hash: hex.encode(preimageHash),
-        sender_pubkey: senderCompressedHex,
         receiver_pubkey: aliceCompressedHex,
         unilateral_claim_delay: { type: 'LOCKTIME_TYPE_SECOND', value: 512 },
         unilateral_refund_delay: { type: 'LOCKTIME_TYPE_SECOND', value: 512 },

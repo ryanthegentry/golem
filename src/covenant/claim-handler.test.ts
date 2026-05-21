@@ -162,7 +162,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
     const mockTx = makeMockArkTx(1);
     vi.mocked(buildOffchainTx).mockReturnValue({
       arkTx: mockTx as any,
-      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+      checkpoints: [makeMockArkTx(99) as any], // mock checkpoint w/ getInput/updateInput for setConditionWitness
     });
     vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-abc');
 
@@ -205,7 +205,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
 
     vi.mocked(buildOffchainTx).mockReturnValue({
       arkTx: makeMockArkTx(2) as any,
-      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+      checkpoints: [makeMockArkTx(99) as any], // mock checkpoint w/ getInput/updateInput for setConditionWitness
     });
     vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-x');
 
@@ -250,7 +250,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
     const { submitCovenantTx } = await import('./introspector.js');
 
     const mockTx = makeMockArkTx(3);
-    const checkpoints = [{ toPSBT: () => new Uint8Array(5) } as any];
+    const checkpoints = [makeMockArkTx(98) as any];
     vi.mocked(buildOffchainTx).mockReturnValue({ arkTx: mockTx as any, checkpoints });
     vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-y');
 
@@ -287,7 +287,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
 
     vi.mocked(buildOffchainTx).mockReturnValue({
       arkTx: makeMockArkTx(4) as any,
-      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+      checkpoints: [makeMockArkTx(99) as any], // mock checkpoint w/ getInput/updateInput for setConditionWitness
     });
     vi.mocked(submitCovenantTx).mockRejectedValue(new Error('introspector down'));
 
@@ -323,7 +323,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
 
     vi.mocked(buildOffchainTx).mockReturnValue({
       arkTx: makeMockArkTx(5) as any,
-      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+      checkpoints: [makeMockArkTx(99) as any], // mock checkpoint w/ getInput/updateInput for setConditionWitness
     });
     vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-op');
 
@@ -349,8 +349,10 @@ describe('CovenantClaimHandler.processVHTLC', () => {
       expect(asHex).toContain('41524b'); // 'ARK'
       // The enforcePayToScript bytes appear inside the packet.
       expect(asHex).toContain(hex.encode(expectedClaimLeaf.enforcePayToScript));
-      // The preimage bytes appear inside the packet (as part of the witness).
-      expect(asHex).toContain(hex.encode(PREIMAGE));
+      // Fulmine-style enforcePayTo consumes no stack inputs — the packet
+      // witness is empty. The preimage lives in the tapleaf's conditionScript
+      // (not in the Introspector packet), so it must NOT appear here.
+      expect(asHex).not.toContain(hex.encode(PREIMAGE));
     } finally {
       repo.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -363,7 +365,7 @@ describe('CovenantClaimHandler.processVHTLC', () => {
 
     vi.mocked(buildOffchainTx).mockReturnValue({
       arkTx: makeMockArkTx(6) as any,
-      checkpoints: [{ toPSBT: () => new Uint8Array(5) } as any],
+      checkpoints: [makeMockArkTx(99) as any], // mock checkpoint w/ getInput/updateInput for setConditionWitness
     });
     vi.mocked(submitCovenantTx).mockResolvedValue('claim-txid-pf');
 

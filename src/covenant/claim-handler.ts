@@ -29,7 +29,7 @@ import { hex } from '@scure/base';
 import { buildOffchainTx, VtxoScript } from '@arkade-os/sdk';
 import type { ArkProvider, CSVMultisigTapscript } from '@arkade-os/sdk';
 import { hash160 } from './crypto.js';
-import { buildOpReturnScript, encodeWitnessStack } from './introspector-packet.js';
+import { buildOpReturnScript, encodeWitnessStack, setConditionWitness } from './introspector-packet.js';
 import { findCovenantClaimLeaf } from './vhtlc-detection.js';
 import { submitCovenantTx } from './introspector.js';
 import type { CovenantClaimsRepo } from '../storage/covenant-claims-repo.js';
@@ -95,13 +95,16 @@ export class CovenantClaimHandler {
     }
 
     // 2. Build the claim tx.
-    //    OP_RETURN bundles the enforcePayTo arkade-script with the preimage witness,
-    //    using the Introspector Packet format (Golem's existing buildOpReturnScript).
+    //    OP_RETURN bundles the enforcePayTo arkade-script for Introspector to
+    //    validate as the commitment. Fulmine PR #411's enforcePayTo consumes
+    //    no stack inputs (preimage handling lives in the tapleaf's
+    //    conditionScript, not in enforcePayTo) — the packet witness must be
+    //    empty or the Introspector engine sees a polluted final stack.
     const opReturn = buildOpReturnScript([
       {
         vin: 0,
         script: found.enforcePayToScript,
-        witness: encodeWitnessStack([preimage]),
+        witness: encodeWitnessStack([]),
       },
     ]);
 
@@ -119,6 +122,16 @@ export class CovenantClaimHandler {
     ];
 
     const { arkTx, checkpoints } = buildOffchainTx([claimInput], claimOutputs, serverUnrollScript);
+
+    // 2b. Inject the preimage into each checkpoint's ConditionWitness PSBT
+    //     field. Fulmine's NonInteractiveClaim leaf is a ConditionMultisigTapscript
+    //     (HASH160 <preimage> EQUAL + multisig). arkd's verifyNonArkdCheckpointSignatures
+    //     (pkg/ark-lib/script/verify.go) reads the condition witness from PSBT
+    //     unknown field key `[222, "condition"]` and runs the conditionScript
+    //     against it before verifying the multisig sigs. Without this, the
+    //     conditionScript pops from an empty stack and we get "index 0 is
+    //     invalid for stack size 0".
+    setConditionWitness(checkpoints[0], 0, [preimage]);
 
     // 3. Capture prevTxBytes BEFORE submission. The bytes don't change during
     //    submission (arkd only adds signatures), so we can persist them either
