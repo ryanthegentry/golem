@@ -69,7 +69,7 @@ describe('Safe harbor adversarial (Fix 4)', () => {
 
     // Mock Unroll — session create + steps
     const { Unroll } = await import('@arkade-os/sdk');
-    const mockStep = { type: Unroll.StepType.DONE, vtxoTxid: 'unroll-txid', do: vi.fn() };
+    const mockStep = { type: Unroll.StepType.DONE, vtxoTxid: 'unroll-txid' };
     vi.spyOn(Unroll.Session, 'create').mockResolvedValue({
       [Symbol.asyncIterator]: async function* () { yield mockStep; },
     } as any);

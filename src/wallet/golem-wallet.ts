@@ -25,6 +25,7 @@ export class GolemWallet {
   private readonly networkName: NetworkName;
   private onchainWallet: OnchainWallet | null = null;
   private sendLock: Promise<void> = Promise.resolve();
+  private disposePromise: Promise<void> | null = null;
 
   private constructor(
     private readonly signer: GolemSigner,
@@ -285,7 +286,6 @@ export class GolemWallet {
       );
 
       for await (const step of session) {
-        await step.do();
         if (step.type === Unroll.StepType.DONE) {
           unrolledTxids.push(step.vtxoTxid);
         }
@@ -300,11 +300,21 @@ export class GolemWallet {
   }
 
   /**
-   * Dispose of key material. Delegates to signer.dispose().
-   * Call on process shutdown (SIGINT/SIGTERM) to zero secret key buffers.
+   * Dispose of key material and SDK background resources.
+   * Call on process shutdown (SIGINT/SIGTERM) to zero secret key buffers
+   * and stop Ark SDK watchers.
    */
-  dispose(): void {
+  dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
+
     this.signer.dispose();
+    this.disposePromise = this.sdkWallet.dispose().catch(err => {
+      this.disposePromise = null;
+      throw err;
+    });
+    return this.disposePromise;
   }
 
   /**

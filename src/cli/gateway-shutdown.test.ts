@@ -24,6 +24,14 @@ describe('Gateway shutdown handlers', () => {
     expect(source).toContain('wallet.dispose()');
   });
 
+  it('CLI gateway.ts awaits wallet.dispose() during shutdown', () => {
+    const source = fs.readFileSync(
+      path.join(import.meta.dirname, 'commands/gateway.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/await\s+wallet\.dispose\(\)/);
+  });
+
   it('gateway-server.ts handles both SIGINT and SIGTERM', () => {
     const source = fs.readFileSync(
       path.join(import.meta.dirname, '../l402/gateway-server.ts'),

@@ -294,10 +294,14 @@ export const gatewayCommand = new Command('gateway')
       process.on(signal, () => {
         const shutdownTimeout = setTimeout(() => process.exit(1), 28_000);
         Promise.resolve(autoSweep?.stopGraceful(25_000))
-          .finally(() => {
+          .finally(async () => {
             bot?.stop();
             agent.stop();
-            wallet.dispose();  // Zero signer key material
+            try {
+              await wallet.dispose();  // Zero signer key material + tear down SDK watchers
+            } catch (err) {
+              console.error('[shutdown] wallet.dispose() failed:', err);
+            }
             gateway.dispose();
             processGuard.dispose();
             server.close();
