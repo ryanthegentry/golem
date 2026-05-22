@@ -149,7 +149,7 @@ Client                    Gateway (port 8402)              Upstream API
 
 - **Wallet**: creation, boarding, OOR sends, balance, VTXO expiry tracking
 - **L402 gateway**: macaroon minting/verification, dual-mode 402 challenges, proxy routing, rate limiting
-- **Security**: constant-time preimage verification, per-macaroon root keys, time-before caveats, IP rate limiting (44 security tests)
+- **Security**: constant-time preimage verification, per-macaroon root keys, time-before caveats, IP rate limiting, with dedicated security test coverage
 - **Safe harbor**: cooperative offboard, unilateral exit, emergency threshold monitoring
 - **Signer**: MockSigner, ServerSigner, AES-256-GCM encryption, scrypt key derivation
 - **Agent**: refresh scheduling, expiry calculation, consolidation logic, emergency exit
