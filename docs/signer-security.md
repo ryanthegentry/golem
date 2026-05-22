@@ -26,7 +26,7 @@
 | ASP | Transaction history, VTXO data | Steal funds — user can exit unilaterally |
 | Agent + ASP (Phase 1.5) | Balance visibility, receive-only | Still can't spend — no signing key on server |
 
-**Phase 1 security framing:** Hot key on server is the same security model as every Lightning node and other agent wallet (Ark Labs maintainer's own agent wallet on Ark). Pragmatic, not apologetic. Acceptable for testnet and small mainnet amounts.
+**Phase 1 security framing:** Hot key on server is the same security model as every Lightning node. Pragmatic, not apologetic. Acceptable for testnet and small mainnet amounts.
 
 **Phase 1.5 target:** Covenant-based keyless receive eliminates the signing key from the server entirely. See "Covenant-Based Receive" section below.
 
@@ -91,7 +91,7 @@ Low-level primitives (`Intent`, `buildForfeitTx`, `CLTVMultisigTapscript`, `comb
 
 ## Covenant-Based Receive (Phase 1.5)
 
-**Target architecture for keyless Lightning receive.** Gated on Arkade introspection opcodes (Ark Labs maintainer timeline: "before this quarter ends" = March 2026). ~2-3 days of CC work once opcodes are live. Not new infrastructure — it's a mode of the existing agent/SwapManager.
+**Target architecture for keyless Lightning receive.** Gated on Arkade introspection opcodes. Not new infrastructure — it's a mode of the existing agent/SwapManager.
 
 ### The Problem
 
@@ -131,13 +131,13 @@ With covenants, server NEVER holds a signing key:
 
 ## 2-of-2 Multisig (Validated, Deferred)
 
-Ark Labs maintainer proposed: 2-of-2 where one key is agent (server), one key is Alice (phone), with Alice-only timelock sweep.
+An Ark Labs maintainer proposed: 2-of-2 where one key is agent (server), one key is Alice (phone), with Alice-only timelock sweep.
 
 **VTXO script:**
 - `3-of-3: agent + alice + ASP` — collaborative spending path
 - `alice + CSV` — Alice's unilateral exit after timelock
 
-Ark Labs maintainer confirmed ASP enforcement: "That's the whole Point of Arkade :) you write any Bitcoin script, as long respect the VTXO paradigm, gets executed."
+Arkade's ASP enforcement model allows custom Bitcoin scripts as long as they respect the VTXO paradigm.
 
 **Status:** Validated design, deferred. More complex than covenant path (still puts a key on server, requires both CLI and app to exist before creating VTXO scripts). Covenant path is cleaner for the provider use case and arrives sooner. 2-of-2 remains an option for Phase 2+ or as fallback if covenants slip.
 
@@ -183,10 +183,10 @@ User clicks "Deploy on Railway"
   → ~$5-8/month on Railway
 ```
 
-Pattern proven by OpenClaw Railway templates. See: https://railway.com/deploy/openclaw
+Pattern proven by comparable Railway templates.
 
 ### Security for Railway deployment
-- **Phase 1 (ServerSigner):** Hot key encrypted with AES-256, derived from user password. Key is present for all operations. Same security model as every LN node and other agent wallet. Acceptable for small amounts.
+- **Phase 1 (ServerSigner):** Hot key encrypted with AES-256, derived from user password. Key is present for all operations. Same security model as every LN node. Acceptable for small amounts.
 - **Phase 1.5 (covenant):** Server has NO signing key. Runs in receive-only mode. Claim daemon handles Lightning receive via covenants. The strongest security model — nothing to steal from the server.
 - Setup wizard password-protected
 - User can export and migrate to self-hosted Docker
@@ -227,14 +227,6 @@ Pattern proven by OpenClaw Railway templates. See: https://railway.com/deploy/op
 | Signer offline near expiry | Emergency alerts. Use mobile app directly. |
 | All else fails near expiry | Force-withdraw to safe harbor on-chain. |
 
-## Business Model
-
-- **Free / Open Source:** Agent software + VTXO refresh + Service Directory registration (discoverability for L402 endpoints). User self-hosts or pays Railway directly.
-- **Pro ($10-20/mo):** Managed hosting, premium alerting, consolidation optimization.
-- **Premium ($30-50/mo):** Pro + encrypted tx tree backup (S3), anomaly detection, DeFi automation, free Tapsigner.
-
-**Conversion funnel:** 7-day VTXO expiry (mainnet) = natural conversion event. Users who don't have the mobile app must interact with the system weekly. The CLI earns the trust. The app captures the revenue.
-
 ## Golem Service Directory
 
 Public registry of L402-enabled APIs. Connects providers (`golem gateway`) with consumers (agent wallets, `golem pay`).
@@ -247,6 +239,4 @@ Public registry of L402-enabled APIs. Connects providers (`golem gateway`) with 
 - `golem directory search <query>` — keyword search, `--category`, `--max-price`
 - `golem directory list` — show registered services
 
-**Phase 1:** Centralized (Golem-operated REST API + web UI). **Phase 3:** Decentralized (Nostr-based registry federation).
-
-**Strategic:** Two-sided network effects. First mover owns the distribution layer for the L402 economy.
+**Phase 1:** Centralized REST API + web UI. **Phase 3:** Decentralized (Nostr-based registry federation).

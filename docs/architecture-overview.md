@@ -15,7 +15,7 @@ Key properties:
 - The ASP runs **rounds** (~every minute on mutinynet) that batch operations
 - No channels, no routing, no liquidity management for the user
 
-Ark Labs runs the reference ASP at `mutinynet.arkade.sh`. That's who Ark Labs maintainer's team is.
+Ark Labs runs the reference ASP at `mutinynet.arkade.sh`.
 
 ## Layer 1: `@arkade-os/sdk` — Ark Labs' TypeScript SDK
 
@@ -259,7 +259,7 @@ The proof moves: **Preimage travels back from Boltz → LND → Client → Gatew
 |-----------|-----------|-------------|-------|
 | Voltage LND | Lightning node | Us (test payer) | `golem-tester.u.voltageapp.io` |
 | Boltz | Non-custodial swap provider | Boltz team | `api.boltz.mutinynet.arkade.sh` |
-| Ark ASP | Ark Service Provider | Ark Labs (Ark Labs maintainer) | `mutinynet.arkade.sh` |
+| Ark ASP | Ark Service Provider | Ark Labs | `mutinynet.arkade.sh` |
 | Golem Gateway | L402 reverse proxy | Us (the operator) | `localhost:8402` |
 | Mock backend | Upstream API being monetized | Us (demo) | `localhost:3097` |
 | Golem wallet | Ark client via SDK | Inside the gateway process | In-memory + `~/.golem/data/` |

@@ -3,7 +3,7 @@
  * Uses wallet.settle() which requires alice's key (Phase 1 ServerSigner).
  *
  * @deprecated DEPRECATED ON PATH B — Remove once Boltz ships covenant-claim
- * as swap contract (confirmed by Ark Labs maintainer 2026-04-20 as next-on-list after
+ * as swap contract (confirmed by Ark Labs as next-on-list after
  * Arkade prod migration). Path B lets the Introspector claim the reverse-swap
  * VHTLC directly into the covenant address with zero keys, eliminating this
  * wrap step and the LAST remaining ServerSigner hot-key dependency in

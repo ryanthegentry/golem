@@ -503,7 +503,7 @@ async function main() {
     log('but the fundamental gap remains: OP_INSPECTINPUTSCRIPTPUBKEY returns');
     log('the checkpoint WP, and no output-side packet opcodes exist.');
     log('');
-    log('QUESTION FOR ARK_LABS/COMMUNITY-CONTRIBUTOR:');
+    log('QUESTION FOR ARK LABS:');
     log('');
     log('We need ONE of these to enable recursive covenants:');
     log('');

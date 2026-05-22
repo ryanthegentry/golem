@@ -47,7 +47,7 @@ The claim path persists `prevTxBytes` for the post-claim VTXO. When that VTXO is
 `CovenantClaimHandler` returns `status: 'claimed', persistError: Error` when this happens. Caller responsibility to reconcile. Future hardening could re-derive `prevTxBytes` from the indexer's virtual-tx API on miss, but that's out of scope here.
 
 ### Mainnet Introspector
-Ark Labs maintainer's hardening track is independent. This dispatch's code targets regtest. Mainnet readiness requires (a) Ark Labs maintainer green-lighting the Introspector deployment alongside `arkade.computer`, (b) operational testing, (c) the deferred items above.
+Ark Labs' hardening track is independent. This dispatch's code targets regtest. Mainnet readiness requires (a) Ark Labs green-lighting the Introspector deployment alongside `arkade.computer`, (b) operational testing, (c) the deferred items above.
 
 ### Regtest boarding regression — E2E activation blocked
 As of 2026-05-21 the regtest stack hangs `Ramps.onboard` after the wallet subscribes to the round event stream. The `streamStarted` event arrives, but `safeRegisterIntent` (the SDK's wrapper around `arkProvider.registerIntent`) is never invoked — arkd loops `round X aborted: not enough intents registered 0/1` indefinitely.

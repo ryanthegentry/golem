@@ -2,14 +2,16 @@
 
 Self-custodial Bitcoin wallet on Ark with an L402 gateway for AI agents. Agents receive Lightning payments via Boltz reverse swaps that settle to Ark VTXOs — no LN node required. L402 gates are configurable for arbitrary endpoints, and are managed by the gateway process. Path to covenant-enabled keyless receive once Arkade ships introspection opcodes (OP_SUCCESS202/207/209/213).
 
+**A note on AI assistance:** Most of this codebase was written with heavy AI assistance (Claude Code / Sonnet/Opus). The architecture, security model, test discipline, and edge-case handling are mine — the AI did the typing, I did the engineering. Every commit was reviewed; every change has tests. If you find a bug, it's mine, not the AI's.
+
 ## Quick Start
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/ryanthegentry/golem.git
 cd golem
 npm install
 cp .env.example .env        # Edit with your values (optional for testnet)
-npm test                     # 556 tests, ~10s
+npm test                     # 690 tests, ~10s
 
 # Create a wallet on mutinynet (default)
 npm run golem -- init
@@ -34,15 +36,15 @@ Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <b
 - CLI: `golem init`, `golem balance`, `golem gateway`, `golem stats`, `golem pay`, `golem directory search`
 - ServerSigner with AES-256-GCM encryption (scrypt key derivation)
 - Safe harbor emergency exit (cooperative offboard + unilateral fallback)
-- **556 passing tests** across 46 test files, live on mutinynet and mainnet
+- **690 passing tests** across 46 test files, live on mutinynet and mainnet
 - Telegram monitoring bot with real-time L402 payment notifications
 - `golem gateway init` — auto-discovery for Ollama and OpenAI upstreams, writes `golem.yaml`
 - Auto-registration with [402index.io](https://402index.io) on gateway start
 - Response caching with configurable TTL and price discount
 - Live on mainnet (Railway deployment)
+- Status: [`golem-production.up.railway.app`](https://golem-production.up.railway.app) responds from Railway
 - Post-auth HTTP method validation (`GOLEM_UPSTREAM_METHOD` env var)
 - Macaroon interop fixture for cross-language testing (JS ↔ Go)
-- First third-party transaction: 21,000 sats sent to Ark Labs maintainer via agent-managed wallet
 - Performance: 402 challenge in 139ms, LN payment in ~1s, token verify in 9ms
 - [402index.io](https://402index.io) live with 13K+ L402 endpoints indexed
 
@@ -51,7 +53,7 @@ Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <b
 **Three-component model (non-negotiable boundary):**
 
 ```
-┌─────────────────────-┐     ┌─────────────────────-┐     ┌─────────────────────┐
+┌──────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
 │       SIGNER         │     │        AGENT         │     │        STATE        │
 │  (Mobile or HW key)  │     │    (User-Owned)      │     │   (Arkade / ASP)    │
 │                      │     │                      │     │                     │
@@ -61,7 +63,7 @@ Mainnet: `GOLEM_NETWORK=mainnet npm run golem -- init --encrypt --safe-harbor <b
 │                      │     │ • User deploys it    │     │                     │
 │ MOBILE: <0.21 BTC    │     │ • Claim daemon       │     │                     │
 │ HARDWARE: ≥0.21 BTC  │     │   (covenant, no key) │     │                     │
-└─────────────────────-┘     └─────────────────────-┘     └─────────────────────┘
+└──────────────────────┘     └──────────────────────┘     └─────────────────────┘
 ```
 
 Phase 1 uses ServerSigner (hot key encrypted on disk) — same security model as every LN node. Phase 1.5 targets covenant-based keyless receive where the server never holds a signing key. See [docs/COVENANT.md](docs/COVENANT.md).
@@ -129,8 +131,6 @@ Client                    Gateway (port 8402)              Upstream API
 | Document | Description |
 |---|---|
 | [docs/COVENANT.md](docs/COVENANT.md) | Covenant architecture for keyless agent receive — four-leaf taptree with recursive covenants via Arkade introspection opcodes |
-| [docs/vision.md](docs/vision.md) | Product vision and phased roadmap |
-| [docs/STORYBOARD.md](docs/STORYBOARD.md) | User stories — provider onboarding to agent-to-agent commerce |
 | [docs/research-priorities.md](docs/research-priorities.md) | Open research questions, known unknowns, and resolved items |
 | [docs/signer-security.md](docs/signer-security.md) | Three-component model, signer interface, tiered security |
 | [docs/architecture-overview.md](docs/architecture-overview.md) | Layered architecture, L402 gateway flows, full test walkthrough |
@@ -140,7 +140,6 @@ Client                    Gateway (port 8402)              Upstream API
 | [docs/DESIGN.md](docs/DESIGN.md) | Visual design system and CLI output aesthetic |
 | [docs/PROVIDER-GUIDE.md](docs/PROVIDER-GUIDE.md) | Step-by-step guide: monetize any API with L402 payments |
 | [docs/l402-target-apis.md](docs/l402-target-apis.md) | Target API verticals for L402 gateway adoption |
-| [research/ARK-RECURSIVE-COVENANT-BRIEF.md](research/ARK-RECURSIVE-COVENANT-BRIEF.md) | Technical discussion with Ark Labs on recursive covenants via introspection opcodes |
 
 ## Tests
 
@@ -157,7 +156,7 @@ Client                    Gateway (port 8402)              Upstream API
 - **Directory**: 402index.io API client
 
 ```bash
-npm test              # Run all 556 tests
+npm test              # Run all 690 tests
 npm run test:watch    # Watch mode
 ```
 

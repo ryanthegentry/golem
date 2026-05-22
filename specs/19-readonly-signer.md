@@ -40,7 +40,7 @@ Propose splitting `KeyProvider` into `PublicKeyProvider` + `SigningKeyProvider`.
 
 ### Option D: Use StaticKeyProvider (Phase 1)
 Use the SDK's built-in `StaticKeyProvider` which holds a full keypair.
-- **Selected:** Same security model as every Lightning node and other agent wallet. Acceptable for testnet and small mainnet amounts.
+- **Selected:** Same security model as every Lightning node. Acceptable for testnet and small mainnet amounts.
 
 ## Decision
 
@@ -48,7 +48,7 @@ Use the SDK's built-in `StaticKeyProvider` which holds a full keypair.
 
 **Rationale:**
 1. Phase 1 target is testnet + small mainnet amounts
-2. `StaticKeyProvider` matches security model of existing Ark wallets (other agent wallet, LN nodes)
+2. `StaticKeyProvider` matches the security model of hot-key wallets and LN nodes
 3. ReadOnlySigner adds complexity with no Phase 1 benefit
 4. Covenant-based keyless receive (Phase 1.5) is the real security upgrade
 5. Hardware signer integration (Tapsigner) is the Phase 2+ path for large amounts

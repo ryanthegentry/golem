@@ -8,9 +8,9 @@
 
 AI agents running as cloud services need to receive Bitcoin payments (via Lightning/L402) without holding private keys. Today's options:
 
-1. **Hot key on server** (LND, CLN, other agent wallet, Golem Phase 1): Key on disk. Same security as every Lightning node. If server is compromised, funds are lost.
+1. **Hot key on server** (LND, CLN, Golem Phase 1): Key on disk. Same security as every Lightning node. If server is compromised, funds are lost.
 2. **Delegation** (BIP-322 proofs, partial forfeits): Complex, requires periodic mobile app interaction for re-provisioning, still puts some signing capability on the server.
-3. **Custodial** (other agent wallet AWS Nitro, Strike API): Someone else holds the keys. Not self-custodial.
+3. **Custodial services:** Someone else holds the keys. Not self-custodial.
 
 None of these achieve: **server receives Lightning payments with zero key material, user retains full custody, agent operates autonomously.**
 
@@ -61,7 +61,7 @@ OP_INSPECTNUMOUTPUTS
 
 These are the same opcodes Arkade uses internally for `unroll.hack` shared output scripts. The VM evaluates them today. The question is when they're exposed for user-constructed scripts in production.
 
-**Ark Labs maintainer (March 1, 2026):** "before this quarter ends" for introspection opcodes. Also confirmed: "There are two things here automatic renewal and HTLC claim that can be delegated to third party without handing over a key."
+**An Ark Labs maintainer:** Introspection opcodes were expected on a near-term roadmap, and automatic renewal plus HTLC claim can be delegated without handing over a key.
 
 ## Three-Leaf Taptree VTXO (Validated on Regtest)
 
@@ -245,7 +245,7 @@ Second (Bark) and Ark Labs (Arkade) implement the same Ark protocol but chose op
 | Refresh atomicity | Connectors | Hash-locks (hArk, as of v0.1.0-beta.6) |
 | CTV stance | Prove demand now, migrate when CTV activates | Wait for CTV as the "proper" path |
 
-Steven Roose (Second CEO) actively pushes CTV+CSFS on [Delving Bitcoin](https://delvingbitcoin.org/t/the-ark-case-for-ctv/1528) as the canonical solution. Ark Labs maintainer's strategy — ship with Introspector now, migrate to on-chain covenants when available — is defensible on market-pull grounds but introduces the TEE trust assumption that Bark avoids.
+Steven Roose (Second CEO) actively pushes CTV+CSFS on [Delving Bitcoin](https://delvingbitcoin.org/t/the-ark-case-for-ctv/1528) as the canonical solution. Arkade's strategy — ship with Introspector now, migrate to on-chain covenants when available — is defensible on market-pull grounds but introduces the TEE trust assumption that Bark avoids.
 
 This divergence between two competent teams implementing the same protocol is a substantive data point. Golem should represent it honestly, not gloss over it.
 
@@ -267,7 +267,7 @@ From [arkade-os/compiler](https://github.com/arkade-os/compiler): Each contract 
 **Community tooling:**
 [libvpack-rs](https://github.com/jgmcalpine/libvpack-rs) — vendor-neutral VTXO verifier and L1 exit transaction generator. Explicitly calls out "Vendor-Locked Recovery" as a risk. Potential collaboration target for Golem's unilateral exit story.
 
-## Open Questions for Ark Labs maintainer
+## Open Questions for Ark Labs
 
 1. For RecursiveVtxo contracts, can the exit-path N-of-N be structured such that Alice can pre-commit a sweep to a specific user-designated safe-harbor L1 address at VTXO creation time, without requiring her live signature during exit? If yes, genuine keyless emergency exit. If no, the mobile PWA signer is load-bearing for the full trust-minimized story.
 
@@ -296,7 +296,6 @@ From [arkade-os/compiler](https://github.com/arkade-os/compiler): Each contract 
 - L402 macaroon implementation (~60 lines, zero dependencies)
 - Agent wallet mode with spending caps
 - CLI: `golem init`, `golem balance`, `golem gateway`, `golem stats`
-- First third-party transaction: 21,000 sats sent to Ark Labs maintainer
 - Timing: 402 challenge in 139ms, Lightning payment in ~1s, token verify in 9ms
 - 402index.io live: 13,196 endpoints, 510 services, 400 providers
 
@@ -373,6 +372,6 @@ The reconstructed 7-leaf VtxoScript (6 from Fulmine's `swap_tree` + 1 covenant l
 See `docs/PHASE-1.5-LIMITS.md` for the full enumeration. Headlines:
 - `@arkade-os/boltz-swap` has no surface to pass NonInteractiveClaim params to Boltz.
 - `ArkadeSwaps.enableAutoActions = true` will conflict with the covenant handler when Boltz starts shipping covenant VHTLCs (resolution deferred until then).
-- Mainnet Introspector deployment is Ark Labs maintainer-gated.
+- Mainnet Introspector deployment depends on Ark Labs readiness.
 
 When Boltz ships Path B, the Day-0 integration is a recipeProvider implementation + auto-claim conflict resolution. Every other piece is built, tested, and waiting.

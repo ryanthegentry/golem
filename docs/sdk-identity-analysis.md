@@ -174,4 +174,4 @@ The SDK uses:
 - `@noble/secp256k1` — Schnorr/ECDSA signing
 - `@noble/curves/secp256k1` — Curve operations for MuSig2
 - `@scure/bip39` — Mnemonic handling
-- `@community-contributor/bitcoin-descriptors` — Output descriptor parsing
+- Bitcoin descriptor parser — Output descriptor parsing

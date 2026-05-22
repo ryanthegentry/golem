@@ -1,6 +1,6 @@
 # L402 Target APIs — What's Worth Paywalling?
 
-Analysis of the top API categories that make sense for Golem's L402 gateway to protect. Ordered by strategic fit.
+Analysis of the top API categories that make sense for Golem's L402 gateway to protect. Ordered by technical fit.
 
 ---
 
@@ -84,18 +84,18 @@ Analysis of the top API categories that make sense for Golem's L402 gateway to p
 
 ---
 
-## Strategic Recommendation
+## Recommendation
 
 **Start with LLM inference for the demo.** It's:
 1. Self-contained (Ollama runs locally, no external API dependency)
 2. The most compelling narrative (AI agents paying AI agents)
-3. The fastest growing market (agent economy)
+3. A fast-growing developer use case
 4. The easiest to price (per-token or per-request)
 5. What developers and investors immediately understand
 
 **Second priority: real-time data feeds.** The AQI demo already works. Expanding to crypto price feeds, weather APIs, etc. broadens the story.
 
-**Long-term moat: privacy services.** This is where self-custodial L402 has an unassailable advantage over custodial payment rails. No one else can offer truly pseudonymous API access with self-custodial payments.
+**Long-term fit: privacy services.** This is where self-custodial L402 has a strong technical advantage over custodial payment rails: pseudonymous API access with self-custodial payments.
 
 ---
 

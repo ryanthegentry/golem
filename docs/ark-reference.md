@@ -75,7 +75,7 @@ Delegation uses **Arkade Intents** — BIP322-style ownership proofs combined wi
 
 4. **Per-VTXO, per-cycle:** After each round, new VTXOs are created. The master key must come online to provision new intents for the next cycle.
 
-### Delegation scope (confirmed by Ark Labs maintainer, Feb 25)
+### Delegation scope
 
 Delegation is constrained to "refresh to same owner" by design. The owner pre-signs a transaction to themselves — the delegate cannot change the output destination. Compromised delegate = DoS only (failing to refresh), NOT fund theft.
 
@@ -120,24 +120,16 @@ These are the same opcodes Arkade already uses internally for `unroll.hack` shar
 
 ### Open Questions
 
-- Can the Arkade-Boltz gateway support covenant-restricted VHTLCs? (asked Ark Labs maintainer, awaiting answer)
+- Can the Arkade-Boltz gateway support covenant-restricted VHTLCs?
 - Does `createLightningInvoice()` require the signing key, or just a pubkey?
 
 See also: [Arkade Contracts Deep Dive](https://docs.arkadeos.com/contracts/deep-dive)
 
-## other agent wallet
+## Other Agent Wallet Designs
 
-**other agent wallet** (https://agent-wallet.example/) is Ark Labs maintainer's own agent wallet on Ark. Key characteristics:
+Other agent-wallet-on-Ark designs use custodial-enclave tradeoffs. Golem's design target is self-custodial L402 receive with covenant claims, which has a different security model and operational profile.
 
-- **Custodial:** Uses Evervault Enclave (not raw AWS Nitro). Not self-custodial.
-- **Same Boltz pattern:** Uses the same `SwapManager` and `@arkade-os/boltz-swap` that Golem uses.
-- **No advanced security:** No multisig, no covenants, no L402, no delegation.
-- **Complementary, not competitive:** other agent wallet = custodial convenience, Golem = self-custodial with L402 standard.
-- **Ark Labs maintainer actively helping:** Ark Labs maintainer is directly helping design Golem's architecture, confirming he sees the two as complementary.
-
-other agent wallet is useful as a reference for the "hot key on server" security model — it's the same approach Golem uses in Phase 1, validated by the Ark protocol creator himself.
-
-## Arkade Platform Roadmap (per Ark Labs maintainer, Feb 25–26, 2026)
+## Arkade Platform Roadmap
 
 | Capability | Status | Timeline |
 |---|---|---|
@@ -155,7 +147,6 @@ Ark Labs explicitly wants third parties to build neobanks and fintechs on Arkade
 - **Ark Labs** — Protocol developers. Build Arkade (Go). Their wallet = Arkade Money.
 - **Second** — SEPARATE company. Independent Ark implementation in Rust. Different team, different codebase.
 - **Boltz** — Non-custodial swap provider. Lightning↔Bitcoin↔Liquid↔Rootstock. KYC-free.
-- **other agent wallet** — Ark Labs maintainer's custodial agent wallet on Ark. Same Boltz SwapManager pattern. Complementary to Golem.
 - **MoneyDevKit** — Different market entirely (serverless Lightning checkout for merchants, built on LDK). Not a competitor. Not tracking.
 
 ## Boltz Integration (Onboarding)

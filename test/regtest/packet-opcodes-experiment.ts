@@ -4,7 +4,7 @@
  *
  * Goal 2: Cross-input script hash verification in consolidation
  * Goal 3: Recursive covenant prototype using OP_TWEAKVERIFY
- * Goal 4: Structured summary for Ark Labs maintainer
+ * Goal 4: Structured summary for Ark Labs
  *
  * Prerequisites:
  *   nigiri start --ci
@@ -446,7 +446,7 @@ async function main() {
   log('');
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // GOAL 3: Recursive Covenant Prototype — Ark Labs maintainer's Approach
+  // GOAL 3: Recursive Covenant Prototype — Ark Labs Approach
   // ═══════════════════════════════════════════════════════════════════════════
 
   log('=== GOAL 3: Recursive Covenant Feasibility Analysis ===');
@@ -501,7 +501,7 @@ async function main() {
 
   log('--- On-Stack scriptPubKey Reconstruction Analysis ---');
   log('');
-  log('Ark Labs maintainer\'s approach: reconstruct the VTXO scriptPubKey on the stack from:');
+  log('Ark Labs approach: reconstruct the VTXO scriptPubKey on the stack from:');
   log('  1. Input\'s Arkade Script hash (from OP_INSPECTINPUTARKADESCRIPTHASH)');
   log('  2. Known constants (Introspector base pubkey, server pubkey, alice pubkey, CSV timelock)');
   log('  3. Point arithmetic to compute tweaked key');
@@ -688,7 +688,7 @@ async function main() {
   log('');
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // GOAL 4: Structured Summary for Ark Labs maintainer
+  // GOAL 4: Structured Summary for Ark Labs
   // ═══════════════════════════════════════════════════════════════════════════
 
   log('');
@@ -707,7 +707,7 @@ async function main() {
   log('   Introspector Packet. Checkpoint-immune — reads from OP_RETURN TLV,');
   log('   not from the transaction graph.');
   log('');
-  log('2. On-stack scriptPubKey reconstruction (Ark Labs maintainer\'s suggestion):');
+  log('2. On-stack scriptPubKey reconstruction (Ark Labs suggestion):');
   log('   Available opcodes: OP_TWEAKVERIFY (0xe4), OP_ECMULSCALARVERIFY (0xe3),');
   log('     OP_SHA256INITIALIZE/UPDATE/FINALIZE (0xc4-0xc6), OP_MERKLEBRANCHVERIFY (0xb3)');
   log('   Missing for reconstruction: OP_CAT (concatenation), OP_TWEAKCOMPUTE');

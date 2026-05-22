@@ -1,6 +1,6 @@
 # Golem Rust Rewrite — System Overview
 
-**Date:** 2026-03-17 | **Phase:** 0.5 (Formal Spec) | **Source:** golem-ark-TS (581 tests, 126 files)
+**Date:** 2026-03-17 | **Phase:** 0.5 (Formal Spec) | **Source:** golem TypeScript implementation (690 tests)
 
 ## Architecture
 
@@ -149,9 +149,9 @@ golem/
 
 ## Quality Gate: Test Coverage
 
-**TS source:** 581 tests across 48 test files.
-**Specs document:** ~499 tests mapped to Rust equivalents.
-**Gap (82 tests):** Accounted for by:
+**TS source:** 690 tests.
+**Specs document:** Rust equivalence map from the earlier TypeScript suite.
+**Known mapping gaps:** Accounted for by:
 - Signer encryption tests (22): Out of scope for Phase 1 (`StaticKeyProvider` replaces encrypted key storage)
 - Identity PSBT/MuSig2 tests (8): Absorbed by SDK internals (Golem doesn't manage signing sessions)
 - CLI integration tests: Not individually specified (delegate to library functions tested in their respective specs)
