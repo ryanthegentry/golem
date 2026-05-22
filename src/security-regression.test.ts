@@ -9,6 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { walletBalance } from './test/wallet-balance.js';
 
 // --- RC1: Cumulative OOR tracking ---
 
@@ -26,14 +27,12 @@ describe('RC1: Cumulative OOR exposure tracking', () => {
     const wallet = await GolemWallet.create(signer, { ...config, dataDir: null });
 
     // Simulate: 20M total, 1.5M already preconfirmed (unsettled OOR)
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 18_500_000,
       settled: 18_500_000,
       preconfirmed: 1_500_000, // Already 1.5M in OOR
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('mock-txid');
 
     // Limit is 10% of 20M = 2M. Already 1.5M preconfirmed.
@@ -59,13 +58,11 @@ describe('RC1: Cumulative OOR exposure tracking', () => {
 
     // Start with 20M, preconfirmed grows with each "send"
     let preconfirmed = 0;
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => ({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => walletBalance({
       total: 20_000_000,
       available: 20_000_000 - preconfirmed,
       settled: 20_000_000 - preconfirmed,
       preconfirmed,
-      lockedInRounds: 0,
-      swept: 0,
     }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockImplementation(async () => {
       preconfirmed += 200_000;

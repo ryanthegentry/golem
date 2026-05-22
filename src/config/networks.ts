@@ -1,3 +1,5 @@
+import type { NetworkName } from '@arkade-os/sdk';
+
 /**
  * Network configuration for Golem — mainnet, mutinynet, regtest.
  *
@@ -11,9 +13,9 @@ export interface NetworkConfig {
   /** Golem network identifier */
   golemNetwork: GolemNetwork;
   /** Arkade SDK network identifier */
-  network: string;
+  network: NetworkName;
   /** Arkade SDK NetworkName for OnchainWallet */
-  networkName: 'bitcoin' | 'testnet' | 'signet' | 'mutinynet' | 'regtest';
+  networkName: NetworkName;
   /** Ark server URL */
   arkServerUrl: string;
   /** Boltz API URL — MUST be explicit, SDK has no mainnet default */

@@ -4,6 +4,7 @@ import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
+import { walletBalance } from '../test/wallet-balance.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -25,14 +26,12 @@ describe('OOR exposure limits', () => {
 
   it('sendBitcoin succeeds when amount is under the limit', async () => {
     // Large balance: 20M sats. 10% = 2M. Send 1M → under limit.
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     const sendSpy = vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('mock-txid-123');
 
     const txid = await wallet.sendBitcoin({ address: 'tark1mockaddress', amount: 1_000_000 });
@@ -42,14 +41,12 @@ describe('OOR exposure limits', () => {
 
   it('sendBitcoin throws OorLimitExceededError when amount exceeds limit', async () => {
     // Large balance: 20M sats. 10% = 2M. Send 3M → over limit.
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     const sendSpy = vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('should-not-reach');
 
     await expect(wallet.sendBitcoin({ address: 'tark1mockaddress', amount: 3_000_000 }))
@@ -59,14 +56,12 @@ describe('OOR exposure limits', () => {
 
   it('large balance: 10% fraction is the effective limit', async () => {
     // 50M sats. 10% = 5M > 1M floor. Limit = 5M.
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 50_000_000,
       available: 50_000_000,
       settled: 50_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('txid');
 
     // 5M exactly → should succeed (not strictly greater)
@@ -80,14 +75,12 @@ describe('OOR exposure limits', () => {
 
   it('small balance: 1M floor is the effective limit', async () => {
     // 5M sats. 10% = 500K < 1M floor. Limit = 1M.
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 5_000_000,
       available: 5_000_000,
       settled: 5_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('txid');
 
     // 1M exactly → should succeed
@@ -100,14 +93,12 @@ describe('OOR exposure limits', () => {
   }, 15_000);
 
   it('zero balance: floor of 1M still applies', async () => {
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 0,
       available: 0,
       settled: 0,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('txid');
 
     // Under floor → should succeed (SDK will fail for other reasons, but limit passes)
@@ -129,14 +120,12 @@ describe('OOR exposure limits', () => {
     });
 
     // 20M sats. 5% = 1M > 500K floor. Limit = 1M.
-    vi.spyOn(customWallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(customWallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     vi.spyOn(customWallet.sdkWallet, 'sendBitcoin').mockResolvedValue('txid');
 
     await expect(customWallet.sendBitcoin({ address: 'tark1mock', amount: 1_000_000 }))
@@ -147,14 +136,12 @@ describe('OOR exposure limits', () => {
   }, 15_000);
 
   it('OorLimitExceededError contains correct metadata', async () => {
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
 
     try {
       await wallet.sendBitcoin({ address: 'tark1mock', amount: 5_000_000 });
@@ -170,14 +157,12 @@ describe('OOR exposure limits', () => {
   }, 15_000);
 
   it('sendBitcoin calls through to SDK sendBitcoin on success', async () => {
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
     const sendSpy = vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('real-txid');
 
     const result = await wallet.sendBitcoin({ address: 'tark1someaddr', amount: 100_000 });

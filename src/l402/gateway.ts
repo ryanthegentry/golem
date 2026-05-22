@@ -13,6 +13,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import type { ArkadeSwaps } from '@arkade-os/boltz-swap';
+import type { IncomingFunds } from '@arkade-os/sdk';
 import {
   mintL402Macaroon,
   verifyL402Token,
@@ -40,15 +41,7 @@ interface PendingArkPayment {
 
 /** Narrow wallet interface — only what the gateway needs for Ark OOR detection. */
 interface ArkWalletNotifier {
-  notifyIncomingFunds(callback: (funds: IncomingFundsEvent) => void): Promise<() => void>;
-}
-
-/** Incoming funds event from the Ark SDK's notifyIncomingFunds callback. */
-interface IncomingFundsEvent {
-  type: 'utxo' | 'vtxo';
-  newVtxos?: Array<{ value: number; [key: string]: unknown }>;
-  spentVtxos?: Array<{ value: number; [key: string]: unknown }>;
-  coins?: Array<{ value: number; [key: string]: unknown }>;
+  notifyIncomingFunds(callback: (funds: IncomingFunds) => void): Promise<() => void>;
 }
 
 interface GatewayConfig {

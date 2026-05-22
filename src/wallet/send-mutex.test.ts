@@ -11,6 +11,7 @@ import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
+import { walletBalance } from '../test/wallet-balance.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -29,13 +30,11 @@ describe('Send mutex (HIGH-003)', () => {
     // 20M total, 10% limit = 2M. Each send is 1.5M.
     // First passes (0 + 1.5M = 1.5M ≤ 2M), second should fail (1.5M + 1.5M = 3M > 2M).
     let preconfirmed = 0;
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => ({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => walletBalance({
       total: 20_000_000,
       available: 20_000_000 - preconfirmed,
       settled: 20_000_000 - preconfirmed,
       preconfirmed,
-      lockedInRounds: 0,
-      swept: 0,
     }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockImplementation(async () => {
       // Simulate async delay + preconfirmed increment
@@ -60,13 +59,11 @@ describe('Send mutex (HIGH-003)', () => {
 
   it('allows sequential sends that cumulatively stay under cap', async () => {
     let preconfirmed = 0;
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => ({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => walletBalance({
       total: 20_000_000,
       available: 20_000_000 - preconfirmed,
       settled: 20_000_000 - preconfirmed,
       preconfirmed,
-      lockedInRounds: 0,
-      swept: 0,
     }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockImplementation(async () => {
       preconfirmed += 500_000;
@@ -84,13 +81,11 @@ describe('Send mutex (HIGH-003)', () => {
     const order: string[] = [];
     let preconfirmed = 0;
 
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => ({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockImplementation(async () => walletBalance({
       total: 20_000_000,
       available: 20_000_000 - preconfirmed,
       settled: 20_000_000 - preconfirmed,
       preconfirmed,
-      lockedInRounds: 0,
-      swept: 0,
     }));
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockImplementation(async () => {
       order.push('send-start');

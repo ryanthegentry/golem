@@ -22,9 +22,9 @@ export function normalizeExpiryMs(batchExpiry: number): number {
 
 /** Extract batchExpiry from SDK VTXOs for use with getNearestExpiryMs. */
 export function toExpiryInput(
-  vtxos: ReadonlyArray<{ virtualStatus: { batchExpiry: number } }>,
+  vtxos: ReadonlyArray<{ virtualStatus: { batchExpiry?: number } }>,
 ): Array<{ batchExpiry: number }> {
-  return vtxos.map(v => ({ batchExpiry: v.virtualStatus.batchExpiry }));
+  return vtxos.map(v => ({ batchExpiry: v.virtualStatus.batchExpiry ?? 0 }));
 }
 
 /**

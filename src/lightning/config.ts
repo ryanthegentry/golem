@@ -1,9 +1,10 @@
 import { type NetworkConfig } from '../config/networks.js';
+import type { NetworkName } from '@arkade-os/sdk';
 
 export interface GolemLightningConfig {
   boltzApiUrl: string;
   /** Must match Boltz and Ark server */
-  network: string;
+  network: NetworkName;
   referralId?: string;
 }
 

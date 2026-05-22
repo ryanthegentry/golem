@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { isBlockHeight, normalizeExpiryMs, getNearestExpiryMs } from './expiry.js';
+import { isBlockHeight, normalizeExpiryMs, getNearestExpiryMs, toExpiryInput } from './expiry.js';
 
 describe('expiry', () => {
   afterEach(() => {
@@ -45,6 +45,30 @@ describe('expiry', () => {
 
     it('throws on block height input', () => {
       expect(() => normalizeExpiryMs(800_000)).toThrow('block height');
+    });
+  });
+
+  // ─── toExpiryInput ─────────────────────────────────────────────────
+
+  describe('toExpiryInput', () => {
+    it('extracts batchExpiry from SDK VTXO shape', () => {
+      expect(toExpiryInput([
+        { virtualStatus: { batchExpiry: 800_000 } },
+        { virtualStatus: { batchExpiry: 900_000 } },
+      ])).toEqual([
+        { batchExpiry: 800_000 },
+        { batchExpiry: 900_000 },
+      ]);
+    });
+
+    it('defaults missing SDK batchExpiry values to 0', () => {
+      expect(toExpiryInput([
+        { virtualStatus: {} },
+        { virtualStatus: { batchExpiry: undefined } },
+      ])).toEqual([
+        { batchExpiry: 0 },
+        { batchExpiry: 0 },
+      ]);
     });
   });
 

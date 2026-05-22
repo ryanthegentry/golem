@@ -8,6 +8,7 @@ import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { walletBalance } from '../test/wallet-balance.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -51,14 +52,12 @@ describe('Pubkey-only wallet (Feature 1)', () => {
     });
 
     // Mock balance so we get past OOR check
-    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue({
+    vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({
       total: 20_000_000,
       available: 20_000_000,
       settled: 20_000_000,
       preconfirmed: 0,
-      lockedInRounds: 0,
-      swept: 0,
-    });
+    }));
 
     await expect(wallet.sendBitcoin({ address: 'tark1mock', amount: 100_000 }))
       .rejects.toThrow(/read-only|receive-only|no private key/i);
