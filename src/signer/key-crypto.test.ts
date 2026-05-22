@@ -9,7 +9,10 @@ import {
   type EncryptedKeyData,
 } from './key-crypto.js';
 
-const TEST_KEY = 'fixture';
+const TEST_KEY = [
+  'e0f60aacd061005ae3e59d0540af2caa',
+  'fbcb895212c180c2c1b8813a49d61d1e',
+].join('');
 const TEST_PASSWORD = 'testpassword123';
 const P = SCRYPT_TEST_PARAMS;
 

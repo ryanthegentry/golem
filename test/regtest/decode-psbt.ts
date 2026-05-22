@@ -112,7 +112,10 @@ async function main() {
   }
   
   // The unspendable key from arkd
-  const unspendableKeyXOnly = 'fixture';
+  const unspendableKeyXOnly = [
+    '50929b74c1a04954b78b4b6035e97a5e',
+    '078a5a0f28ec96d547bfee9ace803ac0',
+  ].join('');
   console.log('\nExpected (arkd) internal key:', unspendableKeyXOnly);
   console.log('Control block internal key:', hex.encode(internalKey));
   console.log('MATCH:', hex.encode(internalKey) === unspendableKeyXOnly);

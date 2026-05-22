@@ -3,7 +3,10 @@ import { etc } from '@noble/secp256k1';
 import { ServerSigner } from './server-signer.js';
 import { encryptSecretKeySync, SCRYPT_TEST_PARAMS } from './key-crypto.js';
 
-const TEST_KEY_HEX = 'fixture';
+const TEST_KEY_HEX = [
+  'e0f60aacd061005ae3e59d0540af2caa',
+  'fbcb895212c180c2c1b8813a49d61d1e',
+].join('');
 const TEST_PASSWORD = 'testpassword123';
 const P = SCRYPT_TEST_PARAMS;
 
