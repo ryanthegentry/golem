@@ -12,3 +12,17 @@ scripts/
 tests/research/
 nigiri
 *.timestamp-*.mjs
+
+# Editor / OS
+.vscode/
+.idea/
+*.tsbuildinfo
+coverage/
+
+# Defense-in-depth: never commit local harness or secret files.
+.claude/
+scripts/
+*.env
+*.env.local
+*-token
+*-tokens
