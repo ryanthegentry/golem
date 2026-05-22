@@ -1,6 +1,6 @@
 # Golem
 
-Self-custodial Bitcoin wallet on Ark with an L402 gateway for AI agents. Agents receive Lightning payments via Boltz reverse swaps that settle to Ark VTXOs — no LN node required. L402 gates are configurable for arbitrary endpoints, and are managed by the gateway process. Phase 1.5 covenant-based keyless receive is proven end-to-end on regtest (boarding → claim → refresh → consolidate), with production wiring gated on Boltz Path B. See [docs/COVENANT.md](docs/COVENANT.md).
+Self-custodial Bitcoin wallet on Ark with an L402 gateway for AI agents. Agents receive Lightning payments via Boltz reverse swaps that settle to Ark VTXOs — no LN node required. L402 gates are configurable for arbitrary endpoints, and are managed by the gateway process. Phase 1.5 covenant-based keyless receive is proven end-to-end on regtest (boarding → claim → refresh → consolidate), with production wiring gated swap providers supporting covenant-encumbered outputs. See [docs/COVENANT.md](docs/COVENANT.md).
 
 **A note on AI assistance:** Most of this codebase was written with heavy AI assistance (Claude Code / Sonnet/Opus). The architecture, security model, test discipline, and edge-case handling are mine — the AI did the typing, I did the engineering. Every commit was reviewed; every change has tests. If you find a bug, it's mine, not the AI's.
 
