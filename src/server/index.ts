@@ -14,6 +14,7 @@ import { walletConfigFromNetwork } from '../wallet/config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from '../wallet/errors.js';
 import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js';
+import { resolveRefreshSafetyMarginMs, DEFAULT_SAFETY_MARGIN_MS } from '../agent/refresh-config.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
@@ -65,7 +66,18 @@ const wallet = await initWalletWithRetry(
 const eventLog = new EventLog<RefreshEvent>(100);
 const sseClients = new Set<(event: RefreshEvent) => void>();
 
-const agent = new RefreshAgent(wallet, { ...DEFAULT_REFRESH_CONFIG, esploraUrl: netConfig.mempoolUrl }, (event) => {
+// The safety margin is overridable so an operator can make the agent act on a VTXO that is
+// outside the steady-state 3-day window — the shape of the 2026-07-26 recovery, where the
+// alternative was hand-rolling a settle against mainnet funds. Bounded in resolveRefresh…().
+const refreshSafetyMarginMs = resolveRefreshSafetyMarginMs();
+if (refreshSafetyMarginMs !== DEFAULT_SAFETY_MARGIN_MS) {
+  console.warn(
+    `[refresh] safety margin overridden to ${refreshSafetyMarginMs}ms ` +
+      `(${(refreshSafetyMarginMs / 3600_000).toFixed(1)}h) via GOLEM_REFRESH_SAFETY_MARGIN_MS`,
+  );
+}
+
+const agent = new RefreshAgent(wallet, { ...DEFAULT_REFRESH_CONFIG, safetyMarginMs: refreshSafetyMarginMs, esploraUrl: netConfig.mempoolUrl }, (event) => {
   eventLog.push(event);
   for (const send of sseClients) {
     send(event);
