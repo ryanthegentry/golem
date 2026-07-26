@@ -1,4 +1,4 @@
-import { BoltzSwapProvider, ArkadeSwaps } from '@arkade-os/boltz-swap';
+import { BoltzSwapProvider, ArkadeSwaps, setLogger } from '@arkade-os/boltz-swap';
 import { SQLiteSwapRepository } from '@arkade-os/boltz-swap/repositories/sqlite';
 import Database from 'better-sqlite3';
 import * as path from 'node:path';
@@ -7,6 +7,7 @@ import type { Wallet } from '@arkade-os/sdk';
 import type { NetworkConfig } from '../config/networks.js';
 import { lightningConfigFromNetwork } from './config.js';
 import { createSQLExecutor } from '../storage/sqlite-executor.js';
+import { BoltzPollMonitor } from './boltz-resilience.js';
 
 export type { GolemLightningConfig } from './config.js';
 export { lightningConfigFromNetwork } from './config.js';
@@ -16,6 +17,8 @@ export type {
   CovenantRecipeProvider,
   SubscribeCovenantClaimsOptions,
 } from './covenant-claim-subscription.js';
+export { BoltzPollMonitor, DEFAULT_RESILIENCE_CONFIG } from './boltz-resilience.js';
+export type { LightningHealth, BreakerState } from './boltz-resilience.js';
 
 /** Terminal Boltz swap statuses — these swaps will never change state again. */
 const TERMINAL_STATUSES = [
@@ -104,11 +107,122 @@ export async function createLightning(
   const lightning = new ArkadeSwaps({
     wallet: sdkWallet,
     swapProvider,
-    swapManager: { enableAutoActions: true },
+    // `autoStart` defaults to true, which makes the ArkadeSwaps constructor kick off its own
+    // unawaited `startSwapManager()`. Combined with the explicit call below that is a race
+    // whose loser logs "SwapManager is already running" — the line on every cold start
+    // (golem#2). Turning autostart off makes initialisation single-path.
+    swapManager: { enableAutoActions: true, autoStart: false },
     ...(swapRepository ? { swapRepository } : {}),
   });
 
+  // Route the SDK's logging through the breaker before anything can emit. The SwapManager
+  // has no failure event to subscribe to, so its log stream is the only signal that polls
+  // are failing — and, unguarded, the source of the flood.
+  const monitor = installPollMonitor(lightning, lnConfig.boltzApiUrl);
+
   await lightning.startSwapManager();
 
+  const swapManager = lightning.getSwapManager?.();
+  if (swapManager) monitor.attach(swapManager as never);
+
   return lightning;
+}
+
+// --- Poll monitor (golem#2) ---
+
+let pollMonitor: BoltzPollMonitor | null = null;
+
+/** The active poll monitor, or null before `createLightning` has run. */
+export function getPollMonitor(): BoltzPollMonitor | null {
+  return pollMonitor;
+}
+
+/**
+ * Build a monitor for this ArkadeSwaps instance and install it as the SDK's logger.
+ * Replaces any previous monitor — `setLogger` is process-global, so exactly one is live.
+ */
+function installPollMonitor(lightning: ArkadeSwaps, boltzApiUrl: string): BoltzPollMonitor {
+  pollMonitor?.stop();
+
+  const monitor = new BoltzPollMonitor({
+    rebind: async () => {
+      // Tear the subscription down and re-establish it. This is the automated form of the
+      // Railway redeploy that every prior recovery depended on.
+      await lightning.stopSwapManager();
+      await lightning.startSwapManager();
+      const mgr = lightning.getSwapManager?.();
+      if (mgr) monitor.attach(mgr as never);
+    },
+    probe: async () => {
+      try {
+        const res = await fetch(`${boltzApiUrl}/v2/version`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+  });
+
+  setLogger(monitor.createSdkLogger());
+  pollMonitor = monitor;
+  return monitor;
+}
+
+export interface SwapManagerHealthReport {
+  healthy: boolean;
+  action: 'none' | 'started' | 'rebound' | 'unavailable';
+  stats?: {
+    isRunning: boolean;
+    monitoredSwaps: number;
+    websocketConnected: boolean;
+    usePollingFallback: boolean;
+  };
+  error?: string;
+}
+
+/**
+ * Idempotent SwapManager init (golem#2, item 3).
+ *
+ * The SDK's own guard returns the cached manager whenever `isRunning` is set, without
+ * checking that the manager is bound to anything — which is how a process can sit "running"
+ * for two days while its subscription is dead. This verifies the manager is both running and
+ * connected, and rebinds it when it is not.
+ *
+ * Mutates state, so it belongs on startup and explicit operator action, not on a read-only
+ * health poll.
+ */
+export async function ensureSwapManagerHealthy(
+  lightning: ArkadeSwaps,
+): Promise<SwapManagerHealthReport> {
+  const manager = lightning.getSwapManager?.();
+  if (!manager) {
+    return { healthy: false, action: 'unavailable', error: 'SwapManager not enabled' };
+  }
+
+  try {
+    const stats = await manager.getStats();
+
+    if (!stats.isRunning) {
+      await lightning.startSwapManager();
+      return { healthy: true, action: 'started', stats };
+    }
+
+    // Running but unbound: the socket is down and it has fallen back to polling. That is the
+    // May 28 shape — process up, subscription gone.
+    if (!stats.websocketConnected && stats.usePollingFallback) {
+      await lightning.stopSwapManager();
+      await lightning.startSwapManager();
+      return { healthy: true, action: 'rebound', stats };
+    }
+
+    return { healthy: true, action: 'none', stats };
+  } catch (err) {
+    return {
+      healthy: false,
+      action: 'unavailable',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

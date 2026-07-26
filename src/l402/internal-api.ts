@@ -25,6 +25,7 @@ import { getNearestExpiryMs, toExpiryInput } from '../agent/expiry.js';
 import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 import { BOLTZ_MINIMUM_SATS } from './gateway.js';
+import type { BoltzPollMonitor } from '../lightning/boltz-resilience.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -37,6 +38,8 @@ interface InternalApiConfig {
   refreshAgentRunning?: () => boolean;
   satsEarnedTotal?: () => number;
   apiKey?: string;
+  /** Supplies the Boltz poll monitor for /internal/lightning-health (golem#2). */
+  pollMonitor?: () => BoltzPollMonitor | null;
 }
 
 export function createInternalApi(config: InternalApiConfig): Hono {
@@ -228,6 +231,53 @@ export function createInternalApi(config: InternalApiConfig): Hono {
     const statusRes = await app.request('/l402/status');
     const body = await statusRes.json();
     return c.json(body, statusRes.status as 200);
+  });
+
+  /**
+   * GET /internal/lightning-health (golem#2)
+   *
+   * Reports whether the swap poller is still bound to Boltz. Unlike /l402/status this is
+   * auth-gated: it exposes operational internals (subscription epoch, suppressed-error
+   * counts) rather than a public liveness signal.
+   *
+   * Read-only on purpose — see the note on `ensureSwapManagerHealthy`. 503 when the breaker
+   * is open so a monitor can alert on status code alone.
+   */
+  app.get('/internal/lightning-health', (c) => {
+    if (!key || !validateBearerToken(c.req.header('Authorization'), key)) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const monitor = config.pollMonitor?.() ?? null;
+    if (!monitor) {
+      return c.json(
+        { healthy: false, reason: 'poll monitor unavailable — Lightning init did not complete' },
+        503,
+      );
+    }
+
+    const health = monitor.getHealth();
+    const healthy = health.breakerState === 'closed';
+
+    return c.json(
+      {
+        healthy,
+        breakerState: health.breakerState,
+        subscriptionEpoch: health.subscriptionEpoch,
+        lastSuccessfulPollAt: health.lastSuccessfulPollAt,
+        lastSuccessfulPollIso:
+          health.lastSuccessfulPollAt === null
+            ? null
+            : new Date(health.lastSuccessfulPollAt).toISOString(),
+        errorCount60s: health.errorCount60s,
+        consecutiveFailures: health.consecutiveFailures,
+        monitoredSwaps: health.monitoredSwaps,
+        websocketConnected: health.websocketConnected,
+        breakerOpenedAt: health.openedAt,
+        suppressedSinceOpen: health.suppressedSinceOpen,
+      },
+      healthy ? 200 : 503,
+    );
   });
 
   return app;

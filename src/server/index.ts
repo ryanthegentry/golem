@@ -22,7 +22,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { createInternalApi } from '../l402/internal-api.js';
 import { FileRootKeyStore } from '../l402/macaroon.js';
 import { MacaroonStore } from '../l402/macaroon-store.js';
-import { createLightning } from '../lightning/index.js';
+import { createLightning, ensureSwapManagerHealthy, getPollMonitor } from '../lightning/index.js';
 import { initWalletWithRetry } from './init-retry.js';
 
 // --- Startup ---
@@ -71,7 +71,15 @@ const macaroonStore = new MacaroonStore(`${l402DataDir}/macaroons.db`);
 let lightning: Awaited<ReturnType<typeof createLightning>> | null = null;
 try {
   lightning = await createLightning(wallet.sdkWallet, netConfig, l402DataDir);
-  console.log('Lightning (SwapManager) started for L402');
+  // Verify the manager is genuinely bound before declaring it started. The SDK's own guard
+  // reports success whenever the instance exists, which is how a process can sit "running"
+  // for two days against a dead subscription (golem#2).
+  const report = await ensureSwapManagerHealthy(lightning);
+  console.log(
+    `Lightning (SwapManager) started for L402 — init=${report.action} ` +
+      `ws_connected=${report.stats?.websocketConnected ?? 'unknown'} ` +
+      `monitored_swaps=${report.stats?.monitoredSwaps ?? 0}`,
+  );
 } catch (err) {
   console.warn('Lightning init failed — L402 challenge/verify will be unavailable:', err instanceof Error ? err.message : err);
 }
@@ -92,6 +100,7 @@ const l402Api = lightning
       startTime: Date.now(),
       refreshAgentRunning: () => agent.isRunning,
       apiKey,
+      pollMonitor: getPollMonitor,
     })
   : null;
 
@@ -307,6 +316,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     signer.dispose();
     processGuard.dispose();
     clearInterval(cleanupInterval);
+    getPollMonitor()?.stop();
     process.exit(0);
   });
 }
