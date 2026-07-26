@@ -20,6 +20,8 @@ import {
   classifyBalanceChange,
   readBalanceSnapshot,
   writeBalanceSnapshot,
+  readRecoveryState,
+  writeRecoveryState,
   type BalanceChange,
 } from '../agent/balance-monitor.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
@@ -101,6 +103,7 @@ console.log('RefreshAgent started');
 // that is the boundary the loss happened across. The snapshot lives in the wallet data dir,
 // which is on the volume, so it survives the deploy it is meant to detect.
 let lastBalanceChange: BalanceChange | null = null;
+let lastRecoverySignals: { pendingRecoverySats: number; recoverableSats: number; lastRecoveryAt: string | null } | null = null;
 
 async function observeBalance(): Promise<void> {
   try {
@@ -117,6 +120,18 @@ async function observeBalance(): Promise<void> {
     };
     const change = classifyBalanceChange(readBalanceSnapshot(walletDataDir), current);
     lastBalanceChange = change;
+
+    // A landed recovery is the one transition worth stamping durably: the Atlas watchdog
+    // uses it to tell "recovery landed" from "recovery still pending", and to escalate when
+    // funds sit recoverable for hours with nothing happening.
+    if (change.kind === 'recovery-completed') {
+      writeRecoveryState(walletDataDir, new Date().toISOString());
+    }
+    lastRecoverySignals = {
+      pendingRecoverySats: current.pendingRecovery,
+      recoverableSats: current.recoverable,
+      lastRecoveryAt: readRecoveryState(walletDataDir).lastRecoveryAt,
+    };
 
     const line = `[balance] ${change.kind} — ${change.message}`;
     if (change.severity === 'error') console.error(line);
@@ -182,6 +197,7 @@ const l402Api = lightning
       pollMonitor: getPollMonitor,
       durability: () => durability,
       balanceChange: () => lastBalanceChange,
+      recoveryStatus: () => lastRecoverySignals,
     })
   : null;
 

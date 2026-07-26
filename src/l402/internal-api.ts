@@ -51,6 +51,16 @@ interface InternalApiConfig {
   durability?: () => DurabilityReport | null;
   /** Latest balance-change classification, for the alarm the 2026-07-25 loss lacked. */
   balanceChange?: () => BalanceChange | null;
+  /**
+   * Recovery signals the Atlas watchdog pages on: `recoverableSats` going nonzero is the
+   * sweep, `lastRecoveryAt` advancing is the landing, and recoverable staying nonzero without
+   * an advance is the stuck-recovery escalation.
+   */
+  recoveryStatus?: () => {
+    pendingRecoverySats: number;
+    recoverableSats: number;
+    lastRecoveryAt: string | null;
+  } | null;
 }
 
 export function createInternalApi(config: InternalApiConfig): Hono {
@@ -298,6 +308,9 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         // What the balance last did, and whether that was alarming. `funds-vanished` and
         // `funds-stranded` are the two that mean money is not where it should be.
         balanceChange: config.balanceChange?.() ?? null,
+        // Always present, null when unwired — the watchdog reads `.recovery` unconditionally
+        // and a missing key would read as a crash rather than "not configured".
+        recovery: config.recoveryStatus?.() ?? null,
         breakerState: health.breakerState,
         subscriptionEpoch: health.subscriptionEpoch,
         lastSuccessfulPollAt: health.lastSuccessfulPollAt,

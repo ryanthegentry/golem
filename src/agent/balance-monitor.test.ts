@@ -22,6 +22,8 @@ import {
   classifyBalanceChange,
   readBalanceSnapshot,
   writeBalanceSnapshot,
+  readRecoveryState,
+  writeRecoveryState,
   BALANCE_SNAPSHOT_FILE,
   DEFAULT_DROP_FRACTION,
 } from './balance-monitor.js';
@@ -159,6 +161,34 @@ describe('balance snapshot persistence', () => {
 
   it('never throws when the directory is unwritable', () => {
     expect(() => writeBalanceSnapshot('/proc/nonexistent/nope', snap({ total: 1 }))).not.toThrow();
+  });
+
+  /**
+   * `lastRecoveryAt` is what the Atlas watchdog reads to tell "recovery landed" from
+   * "recovery still pending", and to escalate when it stays pending too long. It rides in the
+   * same file as the balance snapshot so there is one durable artifact, not two.
+   */
+  it('has no recovery timestamp before one is recorded', () => {
+    writeBalanceSnapshot(dir, snap({ total: 1 }));
+    expect(readRecoveryState(dir).lastRecoveryAt).toBeNull();
+  });
+
+  it('records and reads back a recovery timestamp', () => {
+    writeBalanceSnapshot(dir, snap({ total: 1 }));
+    writeRecoveryState(dir, '2026-07-29T15:02:00.000Z');
+    expect(readRecoveryState(dir).lastRecoveryAt).toBe('2026-07-29T15:02:00.000Z');
+  });
+
+  it('keeps the recovery timestamp when a later balance snapshot is written', () => {
+    writeRecoveryState(dir, '2026-07-29T15:02:00.000Z');
+    writeBalanceSnapshot(dir, snap({ total: 34_870, spendable: 34_870, txCount: 42 }));
+    expect(readRecoveryState(dir).lastRecoveryAt).toBe('2026-07-29T15:02:00.000Z');
+    expect(readBalanceSnapshot(dir)?.total).toBe(34_870);
+  });
+
+  it('returns null rather than throwing on a corrupt file', () => {
+    fs.writeFileSync(path.join(dir, BALANCE_SNAPSHOT_FILE), '{broken');
+    expect(readRecoveryState(dir).lastRecoveryAt).toBeNull();
   });
 
   it('detects the incident across a simulated restart', () => {

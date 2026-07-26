@@ -229,3 +229,66 @@ describe('GET /internal/lightning-health — wallet storage durability', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * Recovery signals. The Atlas watchdog polls this endpoint and pages on transitions, so these
+ * three fields are the contract it reads: `recoverableSats` going nonzero is SWEEP DETECTED,
+ * `lastRecoveryAt` advancing is RECOVERY LANDED, and recoverable staying nonzero with no
+ * advance is the stuck-recovery escalation.
+ */
+describe('GET /internal/lightning-health — recovery signals', () => {
+  let tmpDir: string;
+  let monitor: BoltzPollMonitor;
+
+  const build = (recoveryStatus?: () => { pendingRecoverySats: number; recoverableSats: number; lastRecoveryAt: string | null } | null) =>
+    createInternalApi({
+      lightning: { createLightningInvoice: vi.fn(), startSwapManager: vi.fn() } as any,
+      wallet: { getBalance: vi.fn(), getVtxos: vi.fn() } as any,
+      rootKeyStore: new MemoryRootKeyStore(),
+      macaroonStore: new MacaroonStore(path.join(tmpDir, `r-${Math.random()}.db`)),
+      networkConfig: NETWORK_CONFIGS.mutinynet,
+      startTime: Date.now(),
+      apiKey: API_KEY,
+      pollMonitor: () => monitor,
+      recoveryStatus,
+    });
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-ln-recov-'));
+    monitor = new BoltzPollMonitor({ sink: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  });
+  afterEach(() => { monitor.stop(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  const authed = () => ({ headers: { Authorization: `Bearer ${API_KEY}` } });
+
+  it('reports the pre-sweep state: pending, nothing recoverable, never recovered', async () => {
+    const res = await build(() => ({ pendingRecoverySats: 34_882, recoverableSats: 0, lastRecoveryAt: null }))
+      .request('/internal/lightning-health', authed());
+    const b = await res.json();
+    expect(b.recovery.pendingRecoverySats).toBe(34_882);
+    expect(b.recovery.recoverableSats).toBe(0);
+    expect(b.recovery.lastRecoveryAt).toBeNull();
+  });
+
+  it('reports the post-sweep state the watchdog pages on', async () => {
+    const res = await build(() => ({ pendingRecoverySats: 0, recoverableSats: 34_882, lastRecoveryAt: null }))
+      .request('/internal/lightning-health', authed());
+    const b = await res.json();
+    expect(b.recovery.recoverableSats).toBe(34_882);
+    expect(b.recovery.pendingRecoverySats).toBe(0);
+  });
+
+  it('reports a landed recovery', async () => {
+    const res = await build(() => ({ pendingRecoverySats: 0, recoverableSats: 0, lastRecoveryAt: '2026-07-29T15:02:00.000Z' }))
+      .request('/internal/lightning-health', authed());
+    expect((await res.json()).recovery.lastRecoveryAt).toBe('2026-07-29T15:02:00.000Z');
+  });
+
+  it('degrades to nulls rather than omitting the key when unwired', async () => {
+    // The watchdog reads .recovery unconditionally; a missing key would read as a crash.
+    const res = await build().request('/internal/lightning-health', authed());
+    const b = await res.json();
+    expect(b).toHaveProperty('recovery');
+    expect(b.recovery).toBeNull();
+  });
+});

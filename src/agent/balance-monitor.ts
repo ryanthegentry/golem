@@ -174,15 +174,64 @@ export function readBalanceSnapshot(dir: string): BalanceSnapshot | null {
   }
 }
 
+function readRaw(dir: string): Record<string, unknown> {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, BALANCE_SNAPSHOT_FILE), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Record the current balance. Never throws: failing to write a monitoring breadcrumb must not
- * take down a wallet that is otherwise working.
+ * take down a wallet that is otherwise working. Preserves `lastRecoveryAt`, which is written on
+ * a different schedule and must not be clobbered by a routine balance observation.
  */
 export function writeBalanceSnapshot(dir: string, snapshot: BalanceSnapshot): void {
   try {
+    const existing = readRaw(dir);
     fs.writeFileSync(
       path.join(dir, BALANCE_SNAPSHOT_FILE),
-      JSON.stringify({ ...snapshot, observedAt: new Date().toISOString() }, null, 2),
+      JSON.stringify(
+        {
+          ...snapshot,
+          observedAt: new Date().toISOString(),
+          ...(typeof existing.lastRecoveryAt === 'string'
+            ? { lastRecoveryAt: existing.lastRecoveryAt }
+            : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  } catch {
+    /* observability only */
+  }
+}
+
+export interface RecoveryState {
+  /** ISO timestamp of the last recovery settle that landed, or null. */
+  lastRecoveryAt: string | null;
+}
+
+/**
+ * When a recovery settle last landed. The Atlas watchdog reads this to tell "recovery landed"
+ * from "recovery still pending", and to escalate when funds sit recoverable for too long.
+ */
+export function readRecoveryState(dir: string): RecoveryState {
+  const raw = readRaw(dir);
+  return {
+    lastRecoveryAt: typeof raw.lastRecoveryAt === 'string' ? raw.lastRecoveryAt : null,
+  };
+}
+
+/** Stamp a landed recovery, preserving whatever balance snapshot is already on disk. */
+export function writeRecoveryState(dir: string, at: string): void {
+  try {
+    const existing = readRaw(dir);
+    fs.writeFileSync(
+      path.join(dir, BALANCE_SNAPSHOT_FILE),
+      JSON.stringify({ ...existing, lastRecoveryAt: at }, null, 2),
     );
   } catch {
     /* observability only */
