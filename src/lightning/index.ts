@@ -195,7 +195,9 @@ export interface SwapManagerHealthReport {
  */
 export async function ensureSwapManagerHealthy(
   lightning: ArkadeSwaps,
+  options: { allowRebind?: boolean } = {},
 ): Promise<SwapManagerHealthReport> {
+  const allowRebind = options.allowRebind ?? true;
   const manager = lightning.getSwapManager?.();
   if (!manager) {
     return { healthy: false, action: 'unavailable', error: 'SwapManager not enabled' };
@@ -210,8 +212,9 @@ export async function ensureSwapManagerHealthy(
     }
 
     // Running but unbound: the socket is down and it has fallen back to polling. That is the
-    // May 28 shape — process up, subscription gone.
-    if (!stats.websocketConnected && stats.usePollingFallback) {
+    // May 28 shape — process up, subscription gone. Skipped at startup, where the handshake
+    // may simply not have finished yet and a rebind would restart what we just started.
+    if (allowRebind && !stats.websocketConnected && stats.usePollingFallback) {
       await lightning.stopSwapManager();
       await lightning.startSwapManager();
       return { healthy: true, action: 'rebound', stats };

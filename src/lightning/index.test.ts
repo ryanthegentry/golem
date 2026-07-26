@@ -203,6 +203,42 @@ describe('lightning/index', () => {
       expect(report.action).toBe('unavailable');
     });
 
+    /**
+     * Right after `startSwapManager()` the WebSocket handshake may not have completed, so
+     * stats legitimately read "not connected, using polling fallback". Rebinding on that
+     * would stop and restart the manager we just started — an extra `resumeActionableSwaps`
+     * pass on every boot. At startup the check reports; it does not act.
+     */
+    it('does not rebind a just-started manager when rebinding is disallowed', async () => {
+      const lightning = await createLightning({} as any, NETWORK_CONFIGS.mutinynet);
+      mockStartSwapManager.mockClear();
+      mockStopSwapManager.mockClear();
+      statsRef.current = {
+        isRunning: true,
+        monitoredSwaps: 2,
+        websocketConnected: false,
+        usePollingFallback: true,
+      };
+
+      const report = await ensureSwapManagerHealthy(lightning as any, { allowRebind: false });
+
+      expect(report.action).toBe('none');
+      expect(report.healthy).toBe(true);
+      expect(mockStopSwapManager).not.toHaveBeenCalled();
+      expect(mockStartSwapManager).not.toHaveBeenCalled();
+    });
+
+    it('still starts a stopped manager even when rebinding is disallowed', async () => {
+      const lightning = await createLightning({} as any, NETWORK_CONFIGS.mutinynet);
+      mockStartSwapManager.mockClear();
+      statsRef.current = { ...statsRef.current, isRunning: false };
+
+      const report = await ensureSwapManagerHealthy(lightning as any, { allowRebind: false });
+
+      expect(report.action).toBe('started');
+      expect(mockStartSwapManager).toHaveBeenCalledTimes(1);
+    });
+
     it('calls startSwapManager and returns the lightning instance', async () => {
       const fakeWallet = {} as any;
       const netConfig = NETWORK_CONFIGS.mutinynet;

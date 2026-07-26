@@ -74,7 +74,7 @@ try {
   // Verify the manager is genuinely bound before declaring it started. The SDK's own guard
   // reports success whenever the instance exists, which is how a process can sit "running"
   // for two days against a dead subscription (golem#2).
-  const report = await ensureSwapManagerHealthy(lightning);
+  const report = await ensureSwapManagerHealthy(lightning, { allowRebind: false });
   console.log(
     `Lightning (SwapManager) started for L402 — init=${report.action} ` +
       `ws_connected=${report.stats?.websocketConnected ?? 'unknown'} ` +
