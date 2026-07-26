@@ -1,6 +1,7 @@
 import type { ExtendedVirtualCoin, VtxoScript, CSVMultisigTapscript } from '@arkade-os/sdk';
 import type { GolemWallet } from '../wallet/golem-wallet.js';
 import { DEFAULT_RESERVE_PER_VTXO, DEFAULT_EXIT_THRESHOLD_BLOCKS } from '../config/defaults.js';
+import { FailureSuppressor } from './settle-failure.js';
 import { isBlockHeight, getNearestExpiryMs, blockHeightToRemainingMs, BlockHeightFetcher } from './expiry.js';
 import { isCovenantVtxoExpiring } from '../covenant/vtxo-detection.js';
 import { covenantRefresh } from '../covenant/covenant-refresh.js';
@@ -98,6 +99,12 @@ export class RefreshAgent {
     emergencyExitAttempted: false,
     emergencyExitCompleted: false,
   };
+  /**
+   * Keeps a settle rejection the server will never reverse from being retried into the log
+   * every cycle, and from marching `consecutiveRefreshFailures` toward an emergency exit.
+   */
+  private readonly settleFailures = new FailureSuppressor();
+
   private readonly blockHeightFetcher: BlockHeightFetcher | null;
   /** Current backoff multiplier for exponential backoff on consecutive errors. */
   private backoffMultiplier = 1;
@@ -282,6 +289,7 @@ export class RefreshAgent {
         refreshed = true;
         this.emergency.consecutiveRefreshFailures = 0;
         this.emergency.lastSuccessfulRefresh = new Date();
+        this.settleFailures.reset();
 
         this.emit({
           type: 'refresh_ok',
@@ -290,11 +298,21 @@ export class RefreshAgent {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.emergency.consecutiveRefreshFailures++;
-      this.emit({
-        type: 'refresh_error',
-        error: message,
-      });
+      // A rejection the server will give again for the same input is not the wallet
+      // degrading, so it must not push us toward an emergency exit, and it earns one log
+      // line rather than one per cycle.
+      if (this.settleFailures.countsTowardEmergency(message)) {
+        this.emergency.consecutiveRefreshFailures++;
+      }
+      if (this.settleFailures.shouldReport(message)) {
+        this.emit({
+          type: 'refresh_error',
+          error:
+            this.settleFailures.suppressedCount > 0
+              ? `${message} (suppressed ${this.settleFailures.suppressedCount} repeats)`
+              : message,
+        });
+      }
       return true; // Error occurred — caller should back off
     }
 
