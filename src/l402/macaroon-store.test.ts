@@ -238,3 +238,54 @@ describe('Time-based macaroon minting', () => {
     vi.useRealTimers();
   });
 });
+
+/**
+ * Paid vs unpaid.
+ *
+ * The Atlas watchdog mints a 500-sat challenge on every probe and never pays it. Between
+ * 2026-05-28 and 2026-07-26 that produced 14,703 swaps and 2,583 macaroons — every one unpaid —
+ * which made `activeMacaroons` read as demand when it was self-probe noise.
+ *
+ * Tagging by provenance does not work here: the watchdog probes 402index, which constructs the
+ * request to Golem server-side, so any header the watchdog sets is lost at the proxy. The
+ * distinction that survives is the one already recorded — whether the macaroon was ever
+ * verified, i.e. whether anyone actually paid.
+ */
+describe('MacaroonStore paid vs unpaid counts', () => {
+  let dir: string;
+  let store: MacaroonStore;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-mac-counts-'));
+    store = new MacaroonStore(path.join(dir, 'm.db'));
+  });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  const future = () => Math.floor(Date.now() / 1000) + 3600;
+
+  it('counts an unpaid challenge as active but not verified', () => {
+    store.register('hash-unpaid', future(), 500);
+    expect(store.activeCount()).toBe(1);
+    expect(store.verifiedCount()).toBe(0);
+  });
+
+  it('counts a paid challenge as verified once it is redeemed', () => {
+    store.register('hash-paid', future(), 500);
+    store.verify('hash-paid');
+    expect(store.verifiedCount()).toBe(1);
+  });
+
+  it('separates real demand from self-probe noise — the production shape', () => {
+    for (let i = 0; i < 10; i++) store.register(`probe-${i}`, future(), 500);
+    store.register('real', future(), 500);
+    store.verify('real');
+    expect(store.activeCount()).toBe(11);
+    expect(store.verifiedCount()).toBe(1);
+  });
+
+  it('does not count a verified-but-expired macaroon as active', () => {
+    store.register('old', Math.floor(Date.now() / 1000) - 10, 500);
+    store.verify('old');
+    expect(store.activeCount()).toBe(0);
+  });
+});

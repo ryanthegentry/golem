@@ -73,6 +73,23 @@ export class MacaroonStore {
     return row.count;
   }
 
+  /**
+   * Count of currently-active macaroons that were actually redeemed.
+   *
+   * `activeCount()` alone conflates real demand with self-probe noise: the Atlas watchdog mints
+   * a challenge on every probe and never pays it, which is how 2,583 macaroons accumulated with
+   * not one payment. Provenance tagging cannot fix that — the watchdog probes 402index, which
+   * builds the request to Golem server-side, so any header it sets dies at the proxy. Whether
+   * anyone paid is the distinction that survives, and it is already recorded.
+   */
+  verifiedCount(): number {
+    const now = Math.floor(Date.now() / 1000);
+    const row = this.db.prepare(
+      'SELECT COUNT(*) as count FROM active_macaroons WHERE expires_at > ? AND last_verified_at IS NOT NULL'
+    ).get(now) as { count: number };
+    return row.count;
+  }
+
   /** Cleanup: delete expired macaroons older than 7 days */
   cleanup(): number {
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400;

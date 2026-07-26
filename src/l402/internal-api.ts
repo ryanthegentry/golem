@@ -240,6 +240,11 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         nearestExpiryHours: nearestExpiryHours === Infinity ? -1 : Math.round(nearestExpiryHours * 10) / 10,
         refreshAgentRunning: config.refreshAgentRunning ? config.refreshAgentRunning() : false,
         activeMacaroons: macaroonStore.activeCount(),
+        // Split out so self-probe noise stops reading as demand. The Atlas watchdog mints a
+        // challenge every probe and never pays it — 2,583 macaroons, zero payments, as of
+        // 2026-07-26. `paidMacaroons` is the number that means business.
+        paidMacaroons: macaroonStore.verifiedCount(),
+        unpaidMacaroons: macaroonStore.activeCount() - macaroonStore.verifiedCount(),
         boltzReachable,
         aspReachable,
         uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
