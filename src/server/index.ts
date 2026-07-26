@@ -15,7 +15,13 @@ import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from '../wallet/errors.js';
 import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js';
 import { resolveRefreshSafetyMarginMs, DEFAULT_SAFETY_MARGIN_MS } from '../agent/refresh-config.js';
-import { oorLimitFor } from '../wallet/spendable-balance.js';
+import { oorLimitFor, spendableSats } from '../wallet/spendable-balance.js';
+import {
+  classifyBalanceChange,
+  readBalanceSnapshot,
+  writeBalanceSnapshot,
+  type BalanceChange,
+} from '../agent/balance-monitor.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
@@ -88,6 +94,43 @@ const agent = new RefreshAgent(wallet, { ...DEFAULT_REFRESH_CONFIG, safetyMargin
 agent.start();
 console.log('RefreshAgent started');
 
+// --- Balance invariant ---
+//
+// On 2026-07-25 the wallet went 34,882 sats -> 0 across a deploy and nothing screamed; a human
+// noticed a dashboard. The check that would have caught it compares startup to startup, because
+// that is the boundary the loss happened across. The snapshot lives in the wallet data dir,
+// which is on the volume, so it survives the deploy it is meant to detect.
+let lastBalanceChange: BalanceChange | null = null;
+
+async function observeBalance(): Promise<void> {
+  try {
+    const [balance, txs] = await Promise.all([
+      wallet.getBalance(),
+      wallet.getTransactionHistory(),
+    ]);
+    const current = {
+      total: balance.total,
+      spendable: spendableSats(balance),
+      pendingRecovery: balance.pendingRecovery ?? 0,
+      recoverable: balance.recoverable ?? 0,
+      txCount: txs.length,
+    };
+    const change = classifyBalanceChange(readBalanceSnapshot(walletDataDir), current);
+    lastBalanceChange = change;
+
+    const line = `[balance] ${change.kind} — ${change.message}`;
+    if (change.severity === 'error') console.error(line);
+    else if (change.severity === 'warn') console.warn(line);
+    else console.log(line);
+
+    writeBalanceSnapshot(walletDataDir, current);
+  } catch (err) {
+    console.warn('[balance] observation skipped:', err instanceof Error ? err.message : err);
+  }
+}
+
+await observeBalance();
+
 // --- API Key ---
 
 const apiKey = process.env.GOLEM_API_KEY;
@@ -123,6 +166,7 @@ const cleanupInterval = setInterval(() => {
   rootKeyStore.cleanup();
   macaroonStore.cleanup();
   runSwapCleanup();
+  void observeBalance();
 }, 3600_000);
 
 const l402Api = lightning
@@ -137,6 +181,7 @@ const l402Api = lightning
       apiKey,
       pollMonitor: getPollMonitor,
       durability: () => durability,
+      balanceChange: () => lastBalanceChange,
     })
   : null;
 

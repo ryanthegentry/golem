@@ -28,6 +28,7 @@ import { BOLTZ_MINIMUM_SATS } from './gateway.js';
 import type { BoltzPollMonitor } from '../lightning/boltz-resilience.js';
 import type { DurabilityReport } from '../server/data-durability.js';
 import { spendableSats } from '../wallet/spendable-balance.js';
+import type { BalanceChange } from '../agent/balance-monitor.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -48,6 +49,8 @@ interface InternalApiConfig {
    * survives a deploy is not a reassuring one.
    */
   durability?: () => DurabilityReport | null;
+  /** Latest balance-change classification, for the alarm the 2026-07-25 loss lacked. */
+  balanceChange?: () => BalanceChange | null;
 }
 
 export function createInternalApi(config: InternalApiConfig): Hono {
@@ -292,6 +295,9 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         // way and on a different timescale.
         durable: durability?.durable ?? false,
         durability,
+        // What the balance last did, and whether that was alarming. `funds-vanished` and
+        // `funds-stranded` are the two that mean money is not where it should be.
+        balanceChange: config.balanceChange?.() ?? null,
         breakerState: health.breakerState,
         subscriptionEpoch: health.subscriptionEpoch,
         lastSuccessfulPollAt: health.lastSuccessfulPollAt,
