@@ -27,6 +27,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { BOLTZ_MINIMUM_SATS } from './gateway.js';
 import type { BoltzPollMonitor } from '../lightning/boltz-resilience.js';
 import type { DurabilityReport } from '../server/data-durability.js';
+import { spendableSats } from '../wallet/spendable-balance.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -214,6 +215,14 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         healthy: true,
         network: networkConfig.golemNetwork,
         walletBalanceSats: balance.total,
+        // `total` alone is misleading since sdk 0.4.51: it also carries funds that cannot be
+        // spent yet. `pendingRecovery` is money under a signer the ASP deprecated past its
+        // cutoff and has not swept; `recoverable` is money already swept and awaiting a
+        // recovery settle. Splitting them is also how the sweep gets observed — pendingRecovery
+        // falls to zero and recoverable rises.
+        spendableSats: spendableSats(balance),
+        pendingRecoverySats: balance.pendingRecovery ?? 0,
+        recoverableSats: balance.recoverable ?? 0,
         vtxoCount: vtxos.length,
         nearestExpiryHours: nearestExpiryHours === Infinity ? -1 : Math.round(nearestExpiryHours * 10) / 10,
         refreshAgentRunning: config.refreshAgentRunning ? config.refreshAgentRunning() : false,

@@ -15,6 +15,7 @@ import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from '../wallet/errors.js';
 import { RefreshAgent, DEFAULT_REFRESH_CONFIG } from '../agent/refresh-agent.js';
 import { resolveRefreshSafetyMarginMs, DEFAULT_SAFETY_MARGIN_MS } from '../agent/refresh-config.js';
+import { oorLimitFor } from '../wallet/spendable-balance.js';
 import type { RefreshEvent } from '../agent/refresh-agent.js';
 import { EventLog } from './event-log.js';
 import { resolveServerSigner } from '../signer/resolve-signer.js';
@@ -309,8 +310,10 @@ app.get('/api/info', async (c) => {
       wallet.getPublicKey(),
       wallet.getBalance(),
     ]);
-    const percentLimit = Math.floor(balance.total * walletConfig.oorLimitFraction);
-    const oorLimit = Math.max(percentLimit, walletConfig.oorLimitMinSats);
+    // Sized from spendable funds, not `total`. Since sdk 0.4.51 `total` also carries
+    // `pendingRecovery` and `recoverable`, neither of which can be spent — sizing a spend
+    // control from them inflates it in the unsafe direction.
+    const oorLimit = oorLimitFor(balance, walletConfig);
     return c.json({
       signerType: signerInfo.type,
       publicKey: Buffer.from(pubkey).toString('hex'),

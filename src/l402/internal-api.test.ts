@@ -248,5 +248,22 @@ describe('L402 Internal API', () => {
       expect(body.walletBalanceSats).toBe(50000);
       expect(body.vtxoCount).toBe(2);
     });
+
+    /**
+     * Since sdk 0.4.51 `total` also carries funds that cannot be spent yet:
+     * `pendingRecovery` (deprecated signer past cutoff, server has not swept) and
+     * `recoverable` (swept, not yet redeemed). Reporting only `total` makes 34,882 stranded
+     * sats look like working capital — which is exactly how the 2026-07-26 balance read.
+     * The split is also how the sweep will be observed: pendingRecovery falls to zero and
+     * recoverable rises.
+     */
+    it('separates spendable funds from funds pending recovery', async () => {
+      const res = await app.request('/l402/status');
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toHaveProperty('spendableSats');
+      expect(body).toHaveProperty('pendingRecoverySats');
+      expect(body).toHaveProperty('recoverableSats');
+      expect(typeof body.spendableSats).toBe('number');
+    });
   });
 });
