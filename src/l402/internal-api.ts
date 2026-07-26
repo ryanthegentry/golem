@@ -26,6 +26,7 @@ import { validateBearerToken } from '../auth/safe-compare.js';
 import { secureHeaders } from 'hono/secure-headers';
 import { BOLTZ_MINIMUM_SATS } from './gateway.js';
 import type { BoltzPollMonitor } from '../lightning/boltz-resilience.js';
+import type { DurabilityReport } from '../server/data-durability.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -40,6 +41,12 @@ interface InternalApiConfig {
   apiKey?: string;
   /** Supplies the Boltz poll monitor for /internal/lightning-health (golem#2). */
   pollMonitor?: () => BoltzPollMonitor | null;
+  /**
+   * Supplies the boot-time wallet-storage durability report. Null when the check could not
+   * run, which is reported as not-durable — an unanswered question about whether the wallet
+   * survives a deploy is not a reassuring one.
+   */
+  durability?: () => DurabilityReport | null;
 }
 
 export function createInternalApi(config: InternalApiConfig): Hono {
@@ -248,10 +255,17 @@ export function createInternalApi(config: InternalApiConfig): Hono {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
+    const durability = config.durability?.() ?? null;
+
     const monitor = config.pollMonitor?.() ?? null;
     if (!monitor) {
       return c.json(
-        { healthy: false, reason: 'poll monitor unavailable — Lightning init did not complete' },
+        {
+          healthy: false,
+          reason: 'poll monitor unavailable — Lightning init did not complete',
+          durable: durability?.durable ?? false,
+          durability,
+        },
         503,
       );
     }
@@ -262,6 +276,13 @@ export function createInternalApi(config: InternalApiConfig): Hono {
     return c.json(
       {
         healthy,
+        // Whether ark-sdk.db — contract repository, tx history, unilateral-exit material —
+        // is on storage that survives a deploy. Deliberately not folded into `healthy`:
+        // that flag means "the poller is bound to Boltz" and drives the 503 an external
+        // watchdog alerts on. A wallet whose storage is ephemeral is broken in a different
+        // way and on a different timescale.
+        durable: durability?.durable ?? false,
+        durability,
         breakerState: health.breakerState,
         subscriptionEpoch: health.subscriptionEpoch,
         lastSuccessfulPollAt: health.lastSuccessfulPollAt,

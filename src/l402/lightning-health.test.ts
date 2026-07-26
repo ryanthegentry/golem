@@ -135,3 +135,97 @@ describe('GET /internal/lightning-health', () => {
     expect(body.reason).toMatch(/unavailable/i);
   });
 });
+
+/**
+ * The wallet-storage durability flag. Separate from `healthy`, which stays tied to the
+ * breaker: "the poller is wedged" and "my database is about to be deleted" are different
+ * alarms and the 503 already means the first one.
+ */
+describe('GET /internal/lightning-health — wallet storage durability', () => {
+  let tmpDir: string;
+  let monitor: BoltzPollMonitor;
+
+  const report = (durable: boolean) => ({
+    dataDir: './data-l402/wallet',
+    resolvedPath: durable ? '/app/data-l402/wallet' : '/app/data',
+    durable,
+    confidence: durable ? ('proven-persistent' as const) : ('proven-ephemeral' as const),
+    reason: durable ? 'mount /app/data-l402 is ext4' : 'mount / uses the overlay filesystem',
+    mountPoint: durable ? '/app/data-l402' : '/',
+    fsType: durable ? 'ext4' : 'overlay',
+    bootCount: 2,
+    previousBootAt: '2026-07-25T10:00:00.000Z',
+    markerSurvived: durable,
+  });
+
+  const build = (durability?: () => ReturnType<typeof report> | null) =>
+    createInternalApi({
+      lightning: { createLightningInvoice: vi.fn(), startSwapManager: vi.fn() } as any,
+      wallet: { getBalance: vi.fn(), getVtxos: vi.fn() } as any,
+      rootKeyStore: new MemoryRootKeyStore(),
+      macaroonStore: new MacaroonStore(path.join(tmpDir, `m-${Math.random()}.db`)),
+      networkConfig: NETWORK_CONFIGS.mutinynet,
+      startTime: Date.now(),
+      apiKey: API_KEY,
+      pollMonitor: () => monitor,
+      durability,
+    });
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'golem-ln-durable-'));
+    monitor = new BoltzPollMonitor({ sink: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  });
+
+  afterEach(() => {
+    monitor.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const authed = () => ({ headers: { Authorization: `Bearer ${API_KEY}` } });
+
+  it('carries durable=false when the wallet dir is on the overlay', async () => {
+    const res = await build(() => report(false)).request('/internal/lightning-health', authed());
+    const body = await res.json();
+
+    expect(body.durable).toBe(false);
+    expect(body.durability.fsType).toBe('overlay');
+    expect(body.durability.resolvedPath).toBe('/app/data');
+    expect(body.durability.confidence).toBe('proven-ephemeral');
+  });
+
+  it('carries durable=true when the wallet dir is on the volume', async () => {
+    const res = await build(() => report(true)).request('/internal/lightning-health', authed());
+    const body = await res.json();
+
+    expect(body.durable).toBe(true);
+    expect(body.durability.mountPoint).toBe('/app/data-l402');
+    expect(body.durability.bootCount).toBe(2);
+    expect(body.durability.markerSurvived).toBe(true);
+  });
+
+  it('keeps healthy tied to the breaker — a durable=false wallet still answers 200', async () => {
+    // The two signals must not be conflated: the poller is fine, the storage is not.
+    const res = await build(() => report(false)).request('/internal/lightning-health', authed());
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).healthy).toBe(true);
+  });
+
+  it('reports durable=false when the check could not run at all', async () => {
+    const res = await build(() => null).request('/internal/lightning-health', authed());
+    const body = await res.json();
+
+    expect(body.durable).toBe(false);
+    expect(body.durability).toBeNull();
+  });
+
+  it('reports durable=false when no durability probe is wired', async () => {
+    const res = await build().request('/internal/lightning-health', authed());
+    expect((await res.json()).durable).toBe(false);
+  });
+
+  it('stays behind auth', async () => {
+    const res = await build(() => report(true)).request('/internal/lightning-health');
+    expect(res.status).toBe(401);
+  });
+});

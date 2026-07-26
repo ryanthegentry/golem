@@ -22,8 +22,10 @@ import { secureHeaders } from 'hono/secure-headers';
 import { createInternalApi } from '../l402/internal-api.js';
 import { FileRootKeyStore } from '../l402/macaroon.js';
 import { MacaroonStore } from '../l402/macaroon-store.js';
-import { createLightning, ensureSwapManagerHealthy, getPollMonitor } from '../lightning/index.js';
+import { createLightning, ensureSwapManagerHealthy, getPollMonitor, runSwapCleanup } from '../lightning/index.js';
 import { initWalletWithRetry } from './init-retry.js';
+import { resolveWalletDataDir, resolveL402DataDir } from './data-dir.js';
+import { checkDataDirDurability, formatDurabilityLog } from './data-durability.js';
 
 // --- Startup ---
 
@@ -37,7 +39,22 @@ const signer = await resolveServerSigner().catch((err) => {
 });
 
 const netConfig = getNetworkConfig();
-const walletConfig = walletConfigFromNetwork(netConfig, './data');
+
+// Wallet state goes on the mounted volume, not the container overlay. Until 2026-07-25 this
+// was a literal './data' — /app/data inside the container — and every deploy destroyed
+// ark-sdk.db with it: the contract repository, the transaction history, and the pre-signed
+// tx-tree data unilateral exit depends on. The wallet then came back reporting a zero
+// balance with the coins untouched at the ASP.
+const l402DataDir = resolveL402DataDir();
+const walletDataDir = resolveWalletDataDir();
+
+// Checked before the wallet opens its database, so an operator sees the warning ahead of any
+// write. Reports and continues — a gateway that refuses to boot serves no 402 challenges,
+// which is worse than one that serves them while shouting about its storage.
+const durability = checkDataDirDurability(walletDataDir);
+formatDurabilityLog(durability);
+
+const walletConfig = walletConfigFromNetwork(netConfig, walletDataDir);
 const wallet = await initWalletWithRetry(
   () => GolemWallet.create(signer, walletConfig),
 ).catch((err) => {
@@ -64,7 +81,6 @@ const apiKey = process.env.GOLEM_API_KEY;
 
 // --- L402 Internal API ---
 
-const l402DataDir = process.env.GOLEM_L402_DATA_DIR || './data-l402';
 const rootKeyStore = new FileRootKeyStore(l402DataDir);
 const macaroonStore = new MacaroonStore(`${l402DataDir}/macaroons.db`);
 
@@ -84,10 +100,16 @@ try {
   console.warn('Lightning init failed — L402 challenge/verify will be unavailable:', err instanceof Error ? err.message : err);
 }
 
-// Hourly cleanup of expired root keys and macaroons
+// Hourly cleanup of expired root keys, macaroons, and swap records.
+//
+// Swap cleanup used to run only inside createLightning, i.e. once per process. Production
+// reached 58 days of uptime and 533 pending swap rows, and the fan-out over that set is what
+// provoked the Boltz rate limiting behind golem#2 — which is why a redeploy was always the
+// fix. On the interval it never accumulates (RC3).
 const cleanupInterval = setInterval(() => {
   rootKeyStore.cleanup();
   macaroonStore.cleanup();
+  runSwapCleanup();
 }, 3600_000);
 
 const l402Api = lightning
@@ -101,6 +123,7 @@ const l402Api = lightning
       refreshAgentRunning: () => agent.isRunning,
       apiKey,
       pollMonitor: getPollMonitor,
+      durability: () => durability,
     })
   : null;
 
