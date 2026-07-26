@@ -236,9 +236,14 @@ export class GolemWallet {
    * 2. Try cooperative offboard (fast, requires ASP online)
    * 3. Fall back to unilateral unroll (slow, always works if on-chain reserve exists)
    *
-   * NOTE: Unilateral exit assumes pre-signed tx tree data is available in local storage.
-   * If wallet data dir is lost, unilateral exit is impossible.
-   * Future: S3 backup of data dir (premium tier) or "back up data dir" warning (free tier).
+   * NOTE: unilateral exit does NOT depend on local storage. `Unroll.Session.create` pulls the
+   * chain and the pre-signed transactions from the ASP indexer (`getVtxoChain` /
+   * `getVirtualTxs`), so a lost data dir does not strand the exit. Verified against sdk
+   * 0.4.27 on 2026-07-26 while recovering a VTXO whose local record had been destroyed.
+   *
+   * What a lost data dir does cost is the *contract registry*: `getVtxos()` enumerates
+   * registered contracts, so a VTXO under a script the wallet can no longer derive becomes
+   * invisible and is never passed to the unroll path in the first place.
    *
    * Note: Reserve fee rate uses a static 10 sat/vbyte estimate. Dynamic fee estimation
    * requires mempool monitoring (deferred to post-PoC).
