@@ -10,6 +10,7 @@ import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import type { GolemWalletConfig } from './config.js';
 import { OorLimitExceededError } from './errors.js';
 import { createSQLExecutor } from '../storage/sqlite-executor.js';
+import { resolveSettlementThresholdSeconds } from '../agent/refresh-config.js';
 import { DEFAULT_RESERVE_PER_VTXO } from '../config/defaults.js';
 
 /**
@@ -75,7 +76,10 @@ export class GolemWallet {
     const vtxoManager = new VtxoManager(
       sdkWallet,
       undefined, // deprecated renewalConfig — skip
-      { vtxoThreshold: 259200 }, // 3 days in seconds
+      // Must track the RefreshAgent's safety margin. `renewVtxos` re-filters with this
+      // threshold, so if the agent's margin is wider the agent starts a refresh the SDK then
+      // refuses with "No VTXOs available to renew". Defaults to the same 3 days as before.
+      { vtxoThreshold: resolveSettlementThresholdSeconds() },
     );
 
     return new GolemWallet(signer, identity, sdkWallet, vtxoManager, config);

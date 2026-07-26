@@ -20,6 +20,16 @@ export const MAX_SAFETY_MARGIN_MS = 30 * 24 * 60 * 60 * 1000;
 
 type Env = Record<string, string | undefined>;
 
+/**
+ * The SDK's `VtxoManager` re-filters candidates with its own `settlementConfig.vtxoThreshold`
+ * (seconds) inside `renewVtxos`. If that disagrees with the agent's margin the agent decides
+ * to refresh and the SDK immediately answers "No VTXOs available to renew" — which is exactly
+ * what happened on 2026-07-26 when only the agent's margin was raised. One knob drives both.
+ */
+export function resolveSettlementThresholdSeconds(env: Env = process.env): number {
+  return Math.floor(resolveRefreshSafetyMarginMs(env) / 1000);
+}
+
 export function resolveRefreshSafetyMarginMs(env: Env = process.env): number {
   const raw = env.GOLEM_REFRESH_SAFETY_MARGIN_MS;
   if (!raw) return DEFAULT_SAFETY_MARGIN_MS;

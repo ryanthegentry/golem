@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveRefreshSafetyMarginMs, DEFAULT_SAFETY_MARGIN_MS } from './refresh-config.js';
+import {
+  resolveRefreshSafetyMarginMs,
+  resolveSettlementThresholdSeconds,
+  DEFAULT_SAFETY_MARGIN_MS,
+} from './refresh-config.js';
 
 describe('resolveRefreshSafetyMarginMs', () => {
   it('defaults to 3 days when unset', () => {
@@ -45,6 +49,26 @@ describe('resolveRefreshSafetyMarginMs', () => {
     expect(
       resolveRefreshSafetyMarginMs({ GOLEM_REFRESH_SAFETY_MARGIN_MS: String(oneYear) }),
     ).toBe(DEFAULT_SAFETY_MARGIN_MS);
+  });
+
+  it('the SDK settlement threshold tracks the agent margin — the 2026-07-26 failure', () => {
+    // The agent decided to refresh at a 120h margin while VtxoManager still filtered at 72h,
+    // so renewVtxos answered "No VTXOs available to renew" for a VTXO 84.6h from expiry.
+    // Both gates must come from one value or the agent starts work the SDK refuses.
+    const env = { GOLEM_REFRESH_SAFETY_MARGIN_MS: '432000000' };
+    expect(resolveSettlementThresholdSeconds(env)).toBe(432_000);
+    expect(resolveSettlementThresholdSeconds(env) * 1000).toBe(resolveRefreshSafetyMarginMs(env));
+    expect(resolveSettlementThresholdSeconds(env) * 1000).toBeGreaterThan(84.6 * 3600 * 1000);
+  });
+
+  it('settlement threshold defaults to the same 3 days the SDK had hardcoded', () => {
+    expect(resolveSettlementThresholdSeconds({})).toBe(259_200);
+  });
+
+  it('a rejected override leaves both gates at the default, still agreeing', () => {
+    const env = { GOLEM_REFRESH_SAFETY_MARGIN_MS: 'garbage' };
+    expect(resolveRefreshSafetyMarginMs(env)).toBe(DEFAULT_SAFETY_MARGIN_MS);
+    expect(resolveSettlementThresholdSeconds(env) * 1000).toBe(DEFAULT_SAFETY_MARGIN_MS);
   });
 
   it('accepts the documented ceiling but not one millisecond past it', () => {
