@@ -12,10 +12,11 @@ import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
 import { walletBalance } from '../test/wallet-balance.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
-describe('Send mutex (HIGH-003)', () => {
+describe.skipIf(SKIP_NETWORK)('Send mutex (HIGH-003)', () => {
   let wallet: GolemWallet;
 
   beforeEach(async () => {

@@ -8,10 +8,11 @@ import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
-describe('GolemWallet.dispose()', () => {
+describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
   it('dispose() exists on GolemWallet', async () => {
     const secretKey = utils.randomSecretKey();
     const pubkey = getPublicKey(secretKey, true);

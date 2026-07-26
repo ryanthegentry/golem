@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "start": "tsx src/server/index.ts",
     "golem": "tsx src/cli/index.ts",
     "test": "vitest run",

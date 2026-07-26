@@ -4,6 +4,7 @@ import { GolemWallet } from './golem-wallet.js';
 import { MockSigner } from '../signer/mock-signer.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -14,7 +15,7 @@ const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
  * in the right order. They don't test live exit (requires funded wallet).
  */
 
-describe('GolemWallet safe harbor', () => {
+describe.skipIf(SKIP_NETWORK)('GolemWallet safe harbor', () => {
   let wallet: GolemWallet;
 
   // Create a real wallet connected to mutinynet (zero balance)

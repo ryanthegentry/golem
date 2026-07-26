@@ -14,10 +14,11 @@ import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
-describe('Safe harbor adversarial (Fix 4)', () => {
+describe.skipIf(SKIP_NETWORK)('Safe harbor adversarial (Fix 4)', () => {
   let wallet: GolemWallet;
 
   beforeEach(async () => {

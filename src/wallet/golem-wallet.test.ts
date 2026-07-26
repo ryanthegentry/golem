@@ -4,6 +4,7 @@ import { MockSigner } from '../signer/mock-signer.js';
 import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -11,7 +12,7 @@ const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
  * Integration tests that connect to the live mutinynet Ark server.
  * These require network access but no testnet funds.
  */
-describe('GolemWallet (mutinynet)', () => {
+describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
   it('creates a wallet and fetches addresses', async () => {
     const signer = MockSigner.create();
     const wallet = await GolemWallet.create(signer, {

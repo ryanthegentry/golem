@@ -10,10 +10,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { walletBalance } from './test/wallet-balance.js';
+import { SKIP_NETWORK } from './test/network-gate.js';
 
 // --- RC1: Cumulative OOR tracking ---
 
-describe('RC1: Cumulative OOR exposure tracking', () => {
+describe.skipIf(SKIP_NETWORK)('RC1: Cumulative OOR exposure tracking', () => {
   it('OOR limit uses preconfirmed balance for cumulative check', async () => {
     // Import dynamically to avoid module-level side effects
     const { MockSigner } = await import('./signer/mock-signer.js');

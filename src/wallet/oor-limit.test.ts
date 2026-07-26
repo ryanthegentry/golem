@@ -5,6 +5,7 @@ import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
 import { walletBalance } from '../test/wallet-balance.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -13,7 +14,7 @@ const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
  * These connect to the live mutinynet Ark server (for wallet creation)
  * but mock getBalance/sendBitcoin to test limit logic without funds.
  */
-describe('OOR exposure limits', () => {
+describe.skipIf(SKIP_NETWORK)('OOR exposure limits', () => {
   let wallet: GolemWallet;
 
   beforeEach(async () => {

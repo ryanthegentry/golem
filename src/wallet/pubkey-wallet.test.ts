@@ -9,10 +9,11 @@ import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { walletBalance } from '../test/wallet-balance.js';
+import { SKIP_NETWORK } from '../test/network-gate.js';
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
-describe('Pubkey-only wallet (Feature 1)', () => {
+describe.skipIf(SKIP_NETWORK)('Pubkey-only wallet (Feature 1)', () => {
   it('GolemWallet with ReadOnlySigner can getAddress()', async () => {
     const secretKey = utils.randomSecretKey();
     const pubkey = getPublicKey(secretKey, true);
