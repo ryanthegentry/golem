@@ -8,6 +8,7 @@ import type { NetworkConfig } from '../config/networks.js';
 import { lightningConfigFromNetwork } from './config.js';
 import { createSQLExecutor } from '../storage/sqlite-executor.js';
 import { BoltzPollMonitor } from './boltz-resilience.js';
+import { capPollConcurrency } from './poll-concurrency.js';
 
 export type { GolemLightningConfig } from './config.js';
 export { lightningConfigFromNetwork } from './config.js';
@@ -19,6 +20,7 @@ export type {
 } from './covenant-claim-subscription.js';
 export { BoltzPollMonitor, DEFAULT_RESILIENCE_CONFIG } from './boltz-resilience.js';
 export type { LightningHealth, BreakerState } from './boltz-resilience.js';
+export { capPollConcurrency, DEFAULT_POLL_CONCURRENCY } from './poll-concurrency.js';
 
 /** Terminal Boltz swap statuses — these swaps will never change state again. */
 const TERMINAL_STATUSES = [
@@ -28,7 +30,25 @@ const TERMINAL_STATUSES = [
   'invoice.expired',
 ];
 
-const CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/**
+ * `boltz_swaps.created_at` is written by the SDK as `Math.floor(Date.now() / 1e3)` —
+ * **seconds**. These cutoffs used to be milliseconds, which made every comparison
+ * `1.785e9 < 1.785e12`, i.e. always true: each startup deleted its entire eligible set
+ * regardless of age. One production deploy log recorded 14,425 terminal rows and 533
+ * "stale" pending swaps going in a single pass, the pending set including live in-flight
+ * payments whose VHTLCs then refunded to Boltz unwatched.
+ *
+ * The failure direction matters if a row ever does land in milliseconds: against a seconds
+ * cutoff it looks like the far future and is skipped. Not deleting a stale row is a leak;
+ * deleting a live one loses money.
+ */
+const CLEANUP_AGE_SEC = 7 * 24 * 60 * 60; // 7 days
+const STALE_PENDING_AGE_SEC = 24 * 60 * 60; // 24 hours
+
+/** Current time in the same unit the SDK stores. */
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
 
 /**
  * Delete terminal-state swaps older than 7 days from the swap DB.
@@ -36,7 +56,7 @@ const CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  * Returns the number of deleted rows.
  */
 export function cleanupTerminalSwaps(db: import('better-sqlite3').Database): number {
-  const cutoff = Date.now() - CLEANUP_AGE_MS;
+  const cutoff = nowSeconds() - CLEANUP_AGE_SEC;
   const placeholders = TERMINAL_STATUSES.map(() => '?').join(', ');
   const result = db.prepare(
     `DELETE FROM boltz_swaps WHERE status IN (${placeholders}) AND created_at < ?`,
@@ -47,10 +67,13 @@ export function cleanupTerminalSwaps(db: import('better-sqlite3').Database): num
   return result.changes;
 }
 
-const STALE_PENDING_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-
+/**
+ * Delete non-terminal swaps older than 24 hours. A pending swap that has not moved in a day
+ * is not coming back; one that is younger than that may be an L402 payment in flight, and
+ * dropping it from monitoring is how an unclaimed VHTLC ends up refunded to Boltz.
+ */
 export function cleanupStalePendingSwaps(db: import('better-sqlite3').Database): number {
-  const cutoff = Date.now() - STALE_PENDING_AGE_MS;
+  const cutoff = nowSeconds() - STALE_PENDING_AGE_SEC;
   const result = db.prepare(
     `DELETE FROM boltz_swaps WHERE status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')}) AND created_at < ?`,
   ).run(...TERMINAL_STATUSES, cutoff);
@@ -58,6 +81,40 @@ export function cleanupStalePendingSwaps(db: import('better-sqlite3').Database):
     console.log(`[lightning] Cleaned up ${result.changes} stale pending swap(s) older than 24 hours`);
   }
   return result.changes;
+}
+
+// --- Swap DB cleanup (golem#2 RC3) ---
+
+/**
+ * The swap DB handle, kept so the hourly interval in the server can re-run cleanup. Stale
+ * swaps used to be cleaned only at process start, which is why 58 days of uptime grew the
+ * monitored set to 533 pending swaps and a redeploy was always the fix.
+ */
+let swapDb: import('better-sqlite3').Database | null = null;
+
+export interface SwapCleanupResult {
+  terminal: number;
+  stalePending: number;
+}
+
+/**
+ * Run both cleanups. Returns null when there is no swap DB (in-memory repository) or when
+ * the table is not there yet — neither is worth failing a scheduled tick over.
+ */
+export function runSwapCleanup(
+  db: import('better-sqlite3').Database | null = swapDb,
+): SwapCleanupResult | null {
+  if (!db) return null;
+  try {
+    return {
+      terminal: cleanupTerminalSwaps(db),
+      stalePending: cleanupStalePendingSwaps(db),
+    };
+  } catch (err) {
+    // Non-fatal — table may not exist yet on first run
+    console.warn('[lightning] Swap cleanup skipped:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 /**
@@ -91,17 +148,12 @@ export async function createLightning(
     const db = new Database(path.join(dataDir, 'boltz-swaps.db'));
     db.pragma('journal_mode = DELETE');
     swapRepository = new SQLiteSwapRepository(createSQLExecutor(db));
+    swapDb = db;
 
     // Clean up stale terminal swaps before starting the manager.
     // Boltz purges completed/expired swaps after some TTL. Polling purged swaps
     // generates 404s that feed the circuit breaker and flood logs.
-    try {
-      cleanupTerminalSwaps(db);
-      cleanupStalePendingSwaps(db);
-    } catch (err) {
-      // Non-fatal — table may not exist yet on first run
-      console.warn('[lightning] Swap cleanup skipped:', err instanceof Error ? err.message : err);
-    }
+    runSwapCleanup(db);
   }
 
   const lightning = new ArkadeSwaps({
@@ -123,7 +175,10 @@ export async function createLightning(
   await lightning.startSwapManager();
 
   const swapManager = lightning.getSwapManager?.();
-  if (swapManager) monitor.attach(swapManager as never);
+  if (swapManager) {
+    monitor.attach(swapManager as never);
+    capPollConcurrency(swapManager);
+  }
 
   return lightning;
 }
@@ -151,7 +206,11 @@ function installPollMonitor(lightning: ArkadeSwaps, boltzApiUrl: string): BoltzP
       await lightning.stopSwapManager();
       await lightning.startSwapManager();
       const mgr = lightning.getSwapManager?.();
-      if (mgr) monitor.attach(mgr as never);
+      if (mgr) {
+        monitor.attach(mgr as never);
+        // A rebind may hand back a fresh manager instance, which arrives uncapped.
+        capPollConcurrency(mgr);
+      }
     },
     probe: async () => {
       try {
@@ -208,6 +267,7 @@ export async function ensureSwapManagerHealthy(
 
     if (!stats.isRunning) {
       await lightning.startSwapManager();
+      capPollConcurrency(lightning.getSwapManager?.());
       return { healthy: true, action: 'started', stats };
     }
 
@@ -217,6 +277,7 @@ export async function ensureSwapManagerHealthy(
     if (allowRebind && !stats.websocketConnected && stats.usePollingFallback) {
       await lightning.stopSwapManager();
       await lightning.startSwapManager();
+      capPollConcurrency(lightning.getSwapManager?.());
       return { healthy: true, action: 'rebound', stats };
     }
 
