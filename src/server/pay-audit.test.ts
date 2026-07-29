@@ -41,23 +41,23 @@ const HASH = 'a'.repeat(64);
 describe('createPayAudit', () => {
   it('appends one JSON line per attempt', () => {
     const audit = createPayAudit(dir);
-    audit({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'ok' });
+    audit({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'paid' });
     audit({ ts: 2, paymentHash: HASH, amountSats: 2000, outcome: 'rejected', code: 'PER_CALL_CAP' });
 
     const lines = readLines();
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatchObject({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'ok' });
+    expect(lines[0]).toMatchObject({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'paid' });
     expect(lines[1]).toMatchObject({ outcome: 'rejected', code: 'PER_CALL_CAP' });
   });
 
   it('records the actual debit alongside the invoice amount', () => {
-    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, expectedAmountSats: 1035, outcome: 'ok' });
+    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, expectedAmountSats: 1035, outcome: 'paid' });
     expect(readLines()[0]).toMatchObject({ amountSats: 1000, expectedAmountSats: 1035 });
   });
 
   it('persists across instances — the trail outlives a deploy', () => {
-    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1, outcome: 'ok' });
-    createPayAudit(dir)({ ts: 2, paymentHash: HASH, amountSats: 2, outcome: 'ok' });
+    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1, outcome: 'paid' });
+    createPayAudit(dir)({ ts: 2, paymentHash: HASH, amountSats: 2, outcome: 'paid' });
     expect(readLines()).toHaveLength(2);
   });
 
@@ -67,7 +67,7 @@ describe('createPayAudit', () => {
       ts: 1,
       paymentHash: HASH,
       amountSats: 1000,
-      outcome: 'ok',
+      outcome: 'paid',
       preimage: 'ff'.repeat(32),
       invoice: 'lnbc10u1psecret',
     } as never);
@@ -79,19 +79,19 @@ describe('createPayAudit', () => {
   });
 
   it('logs a one-line summary per attempt', () => {
-    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'ok' });
+    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'paid' });
     expect(console.log).toHaveBeenCalledTimes(1);
     expect(String((console.log as unknown as { mock: { calls: string[][] } }).mock.calls[0][0])).toContain('[pay-invoice]');
   });
 
   it('never logs the preimage in the console summary', () => {
-    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'ok', preimage: 'ff'.repeat(32) } as never);
+    createPayAudit(dir)({ ts: 1, paymentHash: HASH, amountSats: 1000, outcome: 'paid', preimage: 'ff'.repeat(32) } as never);
     const line = String((console.log as unknown as { mock: { calls: string[][] } }).mock.calls[0][0]);
     expect(line).not.toContain('ff'.repeat(32));
   });
 
   it('never throws when the directory is unwritable — auditing must not break settlement', () => {
     const audit = createPayAudit(path.join(dir, 'does', 'not', 'exist'));
-    expect(() => audit({ ts: 1, paymentHash: HASH, amountSats: 1, outcome: 'ok' })).not.toThrow();
+    expect(() => audit({ ts: 1, paymentHash: HASH, amountSats: 1, outcome: 'paid' })).not.toThrow();
   });
 });
