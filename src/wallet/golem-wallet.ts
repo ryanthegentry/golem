@@ -319,7 +319,17 @@ export class GolemWallet {
     }
 
     this.signer.dispose();
-    this.disposePromise = this.sdkWallet.dispose().catch(err => {
+    this.disposePromise = (async () => {
+      // The VtxoManager's poll timers and contract-events subscription are a
+      // second event-loop holder beside the SDK's indexer SSE subscription
+      // (#10) — and its failure must never block the socket teardown below.
+      try {
+        await this.vtxoManager.dispose();
+      } catch (err) {
+        console.error(`VtxoManager dispose failed: ${err instanceof Error ? err.message : err}`);
+      }
+      await this.sdkWallet.dispose();
+    })().catch(err => {
       this.disposePromise = null;
       throw err;
     });

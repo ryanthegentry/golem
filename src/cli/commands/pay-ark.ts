@@ -38,6 +38,4 @@ export async function payArkAddress(address: string, amountStr: string | undefin
     const msg = err instanceof Error ? err.message : String(err);
     exitWithError(msg);
   }
-
-  process.exit(0); // Force exit — SwapManager WebSocket cleanup hangs
 }

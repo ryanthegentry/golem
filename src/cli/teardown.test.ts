@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { getPublicKey, utils } from '@noble/secp256k1';
 import { GolemWallet } from '../wallet/golem-wallet.js';
 import {
@@ -117,26 +118,31 @@ describe('CLI exit discipline (source assertions)', () => {
 });
 
 describe.skipIf(SKIP_NETWORK)('live teardown against mutinynet', () => {
-  it('a real wallet SSE subscription is released by disposeCliResources', async () => {
-    const countHeld = () =>
-      process.getActiveResourcesInfo().filter((r) => r === 'TCPSocketWrap' || r === 'TLSWrap').length;
-    const before = countHeld();
-
-    const { walletConfigFromNetwork } = await import('../wallet/config.js');
-    const { getNetworkConfig } = await import('../config/networks.js');
-    const { ReadOnlySigner } = await import('../signer/read-only-signer.js');
-    const signer = new ReadOnlySigner(Buffer.from(getPublicKey(utils.randomSecretKey(), true)));
-    const wallet = await GolemWallet.create(signer, {
-      ...walletConfigFromNetwork(getNetworkConfig('mutinynet')),
-      dataDir: null,
+  // The natural process exit is the assertion (same instrument as the issue's
+  // reproduction): a child creates a real wallet — opening the SSE
+  // subscription — reads the balance, tears down, and must exit on its own.
+  // Unref'd keep-alive sockets cannot keep a node process alive, so this is
+  // immune to the server-controlled keep-alive noise that makes in-process
+  // handle counting unusable.
+  it('a real wallet process exits on its own after disposeCliResources', async () => {
+    const probe = path.join(CLI_DIR, 'teardown-probe.ts');
+    const tsx = path.join(CLI_DIR, '..', '..', 'node_modules', '.bin', 'tsx');
+    const result = await new Promise<{ code: number | null; out: string; timedOut: boolean }>((resolve) => {
+      const child = spawn(tsx, [probe], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve({ code: null, out, timedOut: true });
+      }, 25_000);
+      child.stdout.on('data', (c) => (out += String(c)));
+      child.stderr.on('data', (c) => (out += String(c)));
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        resolve({ code, out, timedOut: false });
+      });
     });
-    trackCliWallet(wallet);
-    await wallet.getBalance();
-    expect(countHeld()).toBeGreaterThan(before);
-
-    await disposeCliResources();
-    // give the socket close a beat to reach libuv
-    await new Promise((r) => setTimeout(r, 250));
-    expect(countHeld()).toBeLessThanOrEqual(before);
+    expect(result.timedOut, `probe never exited; output: ${result.out.slice(-300)}`).toBe(false);
+    expect(result.out).toContain('TEARDOWN_COMPLETE');
+    expect(result.code).toBe(0);
   }, 30_000);
 });
