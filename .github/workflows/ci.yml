@@ -24,7 +24,7 @@ jobs:
       # fork imports the Ark SDK + native sqlite, and a worker dying (OOM) is
       # invisible — vitest waits on it forever with exactly the observed
       # signature (last file never reported, no summary, no failure output).
-      - run: npm test -- --maxWorkers=1
+      - run: npm test -- --maxWorkers=1 --reporter=verbose
 
   secret-scan:
     runs-on: ubuntu-latest
