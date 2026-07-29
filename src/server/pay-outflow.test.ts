@@ -3,13 +3,17 @@
  * the whole hot wallet, so it has to survive the thing that actually happens in production:
  * a redeploy mid-day. An in-memory counter resets to zero on every restart, which turns a
  * daily cap into a per-deploy cap. Hence: persisted, UTC-dated, atomically written.
+ *
+ * Red-team 2026-07-29 (HIGH-004) established the other half: an unreadable ledger must STOP
+ * spending, not permit it. A single corrupt byte previously handed back the entire daily cap,
+ * and that was the only spend control in the codebase that failed open.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createOutflowLedger, OUTFLOW_FILE } from './pay-outflow.js';
+import { createOutflowLedger, OutflowLedgerUnreadableError, OUTFLOW_FILE } from './pay-outflow.js';
 
 let dir: string;
 
@@ -73,40 +77,108 @@ describe('createOutflowLedger', () => {
     expect(createOutflowLedger(dir).spentToday()).toBe(0);
   });
 
-  it('warns and treats a corrupt file as empty', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), 'not json at all');
-
-    const ledger = createOutflowLedger(dir);
-    expect(ledger.spentToday()).toBe(0);
-    expect(warn).toHaveBeenCalled();
-
-    ledger.record(25);
-    expect(ledger.spentToday()).toBe(25);
-  });
-
-  it('warns and treats a structurally wrong file as empty', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), JSON.stringify({ day: 7, spentSats: 'lots' }));
-
-    expect(createOutflowLedger(dir).spentToday()).toBe(0);
-    expect(warn).toHaveBeenCalled();
-  });
-
   it('does not leave a temp file behind — writes are atomic', () => {
     createOutflowLedger(dir).record(10);
     expect(fs.readdirSync(dir)).toEqual([OUTFLOW_FILE]);
   });
+});
 
-  it('never leaves a partially written ledger visible under the real name', () => {
-    // Rename is atomic; a reader either sees the old value or the new one, never a truncated
-    // JSON document that would be indistinguishable from "nothing spent today".
+describe('createOutflowLedger — fail-closed on corruption (HIGH-004)', () => {
+  it('throws a distinguishable error from spentToday when the file is corrupt', () => {
+    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), 'not json at all');
     const ledger = createOutflowLedger(dir);
-    ledger.record(1);
-    for (let i = 0; i < 20; i++) {
-      ledger.record(1);
-      expect(() => readLedgerFile()).not.toThrow();
-    }
-    expect(ledger.spentToday()).toBe(21);
+
+    expect(() => ledger.spentToday()).toThrow(OutflowLedgerUnreadableError);
+  });
+
+  it('throws from spentToday when the file is structurally wrong', () => {
+    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), JSON.stringify({ day: 7, spentSats: 'lots' }));
+    expect(() => createOutflowLedger(dir).spentToday()).toThrow(OutflowLedgerUnreadableError);
+  });
+
+  it('throws from record when the file is corrupt — never overwrites an unreadable ledger', () => {
+    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), '{"day":');
+    const ledger = createOutflowLedger(dir);
+
+    expect(() => ledger.record(10)).toThrow(OutflowLedgerUnreadableError);
+    // The corrupt file is left exactly as found, for the operator to inspect.
+    expect(fs.readFileSync(path.join(dir, OUTFLOW_FILE), 'utf8')).toBe('{"day":');
+  });
+
+  it('treats a MISSING file as zero, not as corruption', () => {
+    // Absent is the ordinary first-boot state and must not disable spending.
+    expect(() => createOutflowLedger(dir).spentToday()).not.toThrow();
+    expect(createOutflowLedger(dir).spentToday()).toBe(0);
+  });
+
+  it('recovers once an operator repairs the file', () => {
+    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), 'garbage');
+    const ledger = createOutflowLedger(dir);
+    expect(() => ledger.spentToday()).toThrow(OutflowLedgerUnreadableError);
+
+    const today = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(path.join(dir, OUTFLOW_FILE), JSON.stringify({ day: today, spentSats: 250 }));
+    expect(ledger.spentToday()).toBe(250);
+  });
+});
+
+describe('createOutflowLedger — release (reservation semantics)', () => {
+  it('gives headroom back on a provably-clean failure', () => {
+    const ledger = createOutflowLedger(dir);
+    ledger.record(2000);
+    ledger.release(2000);
+    expect(ledger.spentToday()).toBe(0);
+  });
+
+  it('persists the release', () => {
+    const ledger = createOutflowLedger(dir);
+    ledger.record(2000);
+    ledger.release(500);
+    expect(createOutflowLedger(dir).spentToday()).toBe(1500);
+  });
+
+  it('never drives the counter negative', () => {
+    const ledger = createOutflowLedger(dir);
+    ledger.record(100);
+    ledger.release(5000);
+    expect(ledger.spentToday()).toBe(0);
+  });
+
+  it('does not resurrect yesterday — a release after rollover leaves today at zero', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-29T23:59:00Z'));
+    const ledger = createOutflowLedger(dir);
+    ledger.record(2000);
+
+    vi.setSystemTime(new Date('2026-07-30T00:01:00Z'));
+    ledger.release(2000);
+    expect(ledger.spentToday()).toBe(0);
+  });
+});
+
+/*
+ * Note on fsync: the module fsyncs the temp file before the rename and the directory after,
+ * per HIGH-004 item 2. That is not asserted here — `node:fs` is a frozen ESM namespace, so
+ * `vi.spyOn(fs, 'fsyncSync')` throws "Cannot redefine property", and mocking the whole module
+ * would take the real filesystem away from every other test in this file. The durability claim
+ * rests on code review rather than on a test.
+ */
+describe('createOutflowLedger — durable writes (HIGH-004 items 2 and 3)', () => {
+  it('does not use a fixed temp path that concurrent writers would collide on', () => {
+    // A second process mid-write owns its own temp file. Ours must not be that path.
+    const fixed = path.join(dir, `${OUTFLOW_FILE}.tmp`);
+    fs.writeFileSync(fixed, 'other process, mid-write');
+
+    createOutflowLedger(dir).record(10);
+
+    expect(fs.readFileSync(fixed, 'utf8')).toBe('other process, mid-write');
+    expect(readLedgerFile()).toMatchObject({ spentSats: 10 });
+  });
+
+  it('leaves no temp files of its own behind', () => {
+    const ledger = createOutflowLedger(dir);
+    ledger.record(10);
+    ledger.release(5);
+    expect(fs.readdirSync(dir).filter((f) => f.includes('.tmp'))).toEqual([]);
   });
 });
