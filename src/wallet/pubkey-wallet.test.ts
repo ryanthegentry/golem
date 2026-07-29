@@ -10,6 +10,9 @@ import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { walletBalance } from '../test/wallet-balance.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -23,6 +26,7 @@ describe.skipIf(SKIP_NETWORK)('Pubkey-only wallet (Feature 1)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const address = await wallet.getAddress();
     expect(address).toBeTruthy();
@@ -37,6 +41,7 @@ describe.skipIf(SKIP_NETWORK)('Pubkey-only wallet (Feature 1)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const balance = await wallet.getBalance();
     expect(balance.total).toBe(0);
@@ -51,6 +56,7 @@ describe.skipIf(SKIP_NETWORK)('Pubkey-only wallet (Feature 1)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     // Mock balance so we get past OOR check
     vi.spyOn(wallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({

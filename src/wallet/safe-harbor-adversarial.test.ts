@@ -15,6 +15,9 @@ import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -27,6 +30,7 @@ describe.skipIf(SKIP_NETWORK)('Safe harbor adversarial (Fix 4)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
   }, 15_000);
 
   it('attempts cooperative offboard when ASP is online', async () => {

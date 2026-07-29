@@ -22,6 +22,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
       dataDir: null,
     });
     expect(typeof wallet.dispose).toBe('function');
+    await wallet.dispose(); // even here: an undisposed real wallet wedges the fork
   }, 15_000);
 
   it('dispose() calls signer.dispose()', async () => {
