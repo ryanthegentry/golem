@@ -33,6 +33,9 @@ import { createInternalApi } from '../l402/internal-api.js';
 import { FileRootKeyStore } from '../l402/macaroon.js';
 import { MacaroonStore } from '../l402/macaroon-store.js';
 import { createLightning, ensureSwapManagerHealthy, getPollMonitor, runSwapCleanup } from '../lightning/index.js';
+import { decodeInvoice } from '@arkade-os/boltz-swap';
+import { createPayInvoiceRoute, resolveCapsFromEnv } from './pay-invoice.js';
+import { createOutflowLedger } from './pay-outflow.js';
 import { initWalletWithRetry } from './init-retry.js';
 import { resolveWalletDataDir, resolveL402DataDir } from './data-dir.js';
 import { checkDataDirDurability, formatDurabilityLog } from './data-durability.js';
@@ -321,6 +324,21 @@ app.post('/api/receive', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 });
+
+// Lightning payer for the hosted 402index settlement router. Behind the same bearer auth as
+// every other /api route, rate-limited to /api/send's 10-per-minute on its own window, and
+// capped per call and per UTC day by state the caller cannot influence — a compromised router
+// token is bounded by these numbers, not by the router's own guards.
+const payCaps = resolveCapsFromEnv(process.env);
+console.log(`Pay-invoice caps: ${payCaps.maxSatsPerCall} sats/call, ${payCaps.maxSatsPerDay} sats/day`);
+
+app.route('/api/pay-invoice', createPayInvoiceRoute({
+  lightning,
+  decode: decodeInvoice,
+  caps: payCaps,
+  outflow: createOutflowLedger(l402DataDir),
+  rateLimit: { timestamps: [], max: 10, windowMs: 60_000 },
+}));
 
 app.post('/api/onboard', async (c) => {
   try {

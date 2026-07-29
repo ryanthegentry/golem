@@ -46,7 +46,9 @@ function makeStubs(overrides: Partial<Stubs> = {}): Stubs {
 }
 
 /** Mirrors the six auth-middleware lines in src/server/index.ts, using the real validator. */
-function createTestApp(stubs: Stubs, apiKey: string | undefined = API_KEY): Hono {
+function createTestApp(stubs: Stubs, opts: { apiKey?: string | undefined } = {}): Hono {
+  // `in`, not `??`: `{ apiKey: undefined }` is the unconfigured-key case, not "use the default".
+  const apiKey = 'apiKey' in opts ? opts.apiKey : API_KEY;
   const app = new Hono();
   app.use('/api/*', async (c, next) => {
     if (!apiKey) {
@@ -90,7 +92,7 @@ describe('POST /api/pay-invoice — auth', () => {
   });
 
   it('returns 403 when no API key is configured (fail-closed)', async () => {
-    const res = await pay(createTestApp(stubs, undefined), { invoice: INVOICE });
+    const res = await pay(createTestApp(stubs, { apiKey: undefined }), { invoice: INVOICE });
     expect(res.status).toBe(403);
     expect(stubs.lightning!.sendLightningPayment).not.toHaveBeenCalled();
   });
