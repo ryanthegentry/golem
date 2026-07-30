@@ -12,12 +12,54 @@ import { ReadOnlySigner } from '../signer/read-only-signer.js';
 import { GolemWallet } from '../wallet/golem-wallet.js';
 import { walletConfigFromNetwork } from '../wallet/config.js';
 import { getNetworkConfig } from '../config/networks.js';
+import { drainSwapInstances, getPollMonitor } from '../lightning/index.js';
 import { type GolemConfig, loadConfig, configRequiresPassword, getDataDir } from './config.js';
 
 /** Print error message and exit. Consistent error handling for CLI commands. */
 export function exitWithError(message: string): never {
   console.error(`Error: ${message}`);
   process.exit(1);
+}
+
+// Every wallet a CLI command creates, so one central teardown can reach them
+// all (issue #10). The event-loop holder is the Ark SDK's indexer SSE
+// subscription opened inside Wallet.create(); on sdk 0.4.51 an awaited
+// wallet.dispose() releases it and the process exits on its own — which is
+// why no forced process.exit() is needed, or allowed, after teardown.
+const liveWallets: GolemWallet[] = [];
+
+/** Register a wallet for central teardown. */
+export function trackCliWallet(wallet: GolemWallet): void {
+  liveWallets.push(wallet);
+}
+
+/**
+ * Dispose everything a CLI command created: SwapManagers first (their Boltz
+ * WebSocket is a second holder on the pay/receive paths), then wallets —
+ * wallet.dispose() zeroes the signer key, which is the reason teardown must
+ * precede exit on every path, including errors. Never throws: one failed
+ * dispose is logged and must not strand the others.
+ */
+export async function disposeCliResources(): Promise<void> {
+  for (const lightning of drainSwapInstances()) {
+    try {
+      await lightning.stopSwapManager();
+    } catch (err) {
+      console.error(`teardown: stopSwapManager failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  try {
+    getPollMonitor()?.stop();
+  } catch (err) {
+    console.error(`teardown: poll monitor stop failed: ${err instanceof Error ? err.message : err}`);
+  }
+  for (const wallet of liveWallets.splice(0)) {
+    try {
+      await wallet.dispose();
+    } catch (err) {
+      console.error(`teardown: wallet dispose failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 }
 
 /**
@@ -63,7 +105,9 @@ export async function createWalletFromConfig(config: GolemConfig, password?: str
     arkServerUrl: config.arkServer,
   };
 
-  return GolemWallet.create(signer, walletConfig);
+  const wallet = await GolemWallet.create(signer, walletConfig);
+  trackCliWallet(wallet);
+  return wallet;
 }
 
 /**

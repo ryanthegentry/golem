@@ -22,6 +22,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
       dataDir: null,
     });
     expect(typeof wallet.dispose).toBe('function');
+    await wallet.dispose(); // even here: an undisposed real wallet wedges the fork
   }, 15_000);
 
   it('dispose() calls signer.dispose()', async () => {
@@ -43,6 +44,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
     const wallet = Object.assign(Object.create(GolemWallet.prototype), {
       signer,
       sdkWallet,
+      vtxoManager: { dispose: vi.fn().mockResolvedValue(undefined) },
       disposePromise: null,
     }) as GolemWallet;
 
@@ -52,7 +54,38 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
     expect(sdkWallet.dispose).toHaveBeenCalledOnce();
   });
 
-  it('dispose() zeroes signer key material synchronously before async SDK teardown', () => {
+  it('dispose() also disposes the VtxoManager — its poll timers and contract-events subscription are a second event-loop holder (#10)', async () => {
+    const signer = { dispose: vi.fn() };
+    const sdkWallet = { dispose: vi.fn().mockResolvedValue(undefined) };
+    const vtxoManager = { dispose: vi.fn().mockResolvedValue(undefined) };
+    const wallet = Object.assign(Object.create(GolemWallet.prototype), {
+      signer,
+      sdkWallet,
+      vtxoManager,
+      disposePromise: null,
+    }) as GolemWallet;
+
+    await wallet.dispose();
+    expect(vtxoManager.dispose).toHaveBeenCalledOnce();
+    expect(sdkWallet.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('a failing VtxoManager dispose does not block SDK/socket teardown', async () => {
+    const signer = { dispose: vi.fn() };
+    const sdkWallet = { dispose: vi.fn().mockResolvedValue(undefined) };
+    const vtxoManager = { dispose: vi.fn().mockRejectedValue(new Error('poller teardown failed')) };
+    const wallet = Object.assign(Object.create(GolemWallet.prototype), {
+      signer,
+      sdkWallet,
+      vtxoManager,
+      disposePromise: null,
+    }) as GolemWallet;
+
+    await expect(wallet.dispose()).resolves.toBeUndefined();
+    expect(sdkWallet.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('dispose() zeroes signer key material synchronously before async SDK teardown', async () => {
     const signer = { dispose: vi.fn() };
     let resolveSdkDispose!: () => void;
     const sdkWallet = {
@@ -63,12 +96,18 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
     const wallet = Object.assign(Object.create(GolemWallet.prototype), {
       signer,
       sdkWallet,
+      vtxoManager: { dispose: vi.fn().mockResolvedValue(undefined) },
       disposePromise: null,
     }) as GolemWallet;
 
     const disposePromise = wallet.dispose();
 
+    // the security contract: key zeroing is synchronous, before any await
     expect(signer.dispose).toHaveBeenCalledOnce();
+    // SDK teardown starts after the VtxoManager poller has stopped (#10),
+    // so it begins a microtask later, not in the same tick
+    await Promise.resolve();
+    await Promise.resolve();
     expect(sdkWallet.dispose).toHaveBeenCalledOnce();
     resolveSdkDispose();
     return disposePromise;
@@ -80,6 +119,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet.dispose()', () => {
     const wallet = Object.assign(Object.create(GolemWallet.prototype), {
       signer,
       sdkWallet,
+      vtxoManager: { dispose: vi.fn().mockResolvedValue(undefined) },
       disposePromise: null,
     }) as GolemWallet;
 

@@ -5,6 +5,9 @@ import { GolemWallet } from './golem-wallet.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -19,6 +22,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null, // in-memory for tests
     });
+    track(wallet);
 
     const arkAddress = await wallet.getAddress();
     expect(arkAddress).toBeTruthy();
@@ -39,6 +43,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const balance = await wallet.getBalance();
     expect(balance.total).toBe(0);
@@ -55,6 +60,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const info = await wallet.getSignerInfo();
     expect(info.type).toBe('mock');
@@ -67,6 +73,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const pubkey = await wallet.getPublicKey();
     expect(pubkey.length).toBe(33);
@@ -84,10 +91,12 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet1);
     const wallet2 = await GolemWallet.create(signer, {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet2);
 
     const addr1 = await wallet1.getAddress();
     const addr2 = await wallet2.getAddress();
@@ -100,6 +109,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet (mutinynet)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
 
     const expiring = await wallet.getExpiringVtxos();
     expect(expiring).toEqual([]);

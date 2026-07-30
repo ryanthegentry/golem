@@ -9,14 +9,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 dotenv.config({ path: path.join(os.homedir(), '.golem', '.env'), quiet: true });
 
-// Global error handlers — clean output instead of stack traces
+import { disposeCliResources } from './wallet.js';
+
+// Global error handlers — clean output instead of stack traces. Teardown
+// runs first so signer key zeroing happens on these paths too (#10).
 process.on('uncaughtException', (err) => {
   console.error(`Error: ${err.message}`);
-  process.exit(1);
+  void disposeCliResources().finally(() => process.exit(1));
 });
 process.on('unhandledRejection', (reason) => {
   console.error(`Error: ${reason instanceof Error ? reason.message : reason}`);
-  process.exit(1);
+  void disposeCliResources().finally(() => process.exit(1));
 });
 
 import { Command } from 'commander';
@@ -51,4 +54,15 @@ program.addCommand(sweepCommand);
 program.addCommand(receiveCommand);
 program.addCommand(directoryCommand);
 
-program.parse();
+// parseAsync, not parse: parse() returns without awaiting async action
+// handlers, so teardown would run before the command's work. The finally
+// block is the one teardown every command shares — after it, the event loop
+// drains and the process exits on its own. Do not add a forced exit here:
+// if a command still hangs after teardown, that is a second holder to find,
+// and an exit would hide it while skipping nothing-else (key zeroing already
+// ran).
+try {
+  await program.parseAsync();
+} finally {
+  await disposeCliResources();
+}

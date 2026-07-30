@@ -180,7 +180,25 @@ export async function createLightning(
     capPollConcurrency(swapManager);
   }
 
+  trackSwapInstance(lightning);
   return lightning;
+}
+
+// Instances created above, registered so the CLI's central teardown (issue
+// #10) can stop their SwapManager — its Boltz WebSocket is a second
+// event-loop holder on the pay/receive paths. The server creates exactly one
+// instance for the process lifetime and never drains it; that single entry
+// is inert.
+const createdSwapInstances: Pick<ArkadeSwaps, 'stopSwapManager'>[] = [];
+
+/** Register an ArkadeSwaps instance for central CLI teardown. */
+export function trackSwapInstance(lightning: Pick<ArkadeSwaps, 'stopSwapManager'>): void {
+  createdSwapInstances.push(lightning);
+}
+
+/** Return and clear all registered instances (teardown claims them once). */
+export function drainSwapInstances(): Pick<ArkadeSwaps, 'stopSwapManager'>[] {
+  return createdSwapInstances.splice(0);
 }
 
 // --- Poll monitor (golem#2) ---
