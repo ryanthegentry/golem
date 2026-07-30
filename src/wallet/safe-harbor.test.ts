@@ -5,6 +5,9 @@ import { MockSigner } from '../signer/mock-signer.js';
 import { walletConfigFromNetwork } from './config.js';
 import { getNetworkConfig } from '../config/networks.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -25,6 +28,7 @@ describe.skipIf(SKIP_NETWORK)('GolemWallet safe harbor', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null, // in-memory
     });
+    track(wallet);
   }, 15_000);
 
   it('getRequiredReserve returns zero for empty wallet', async () => {

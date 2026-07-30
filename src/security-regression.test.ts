@@ -37,13 +37,21 @@ describe.skipIf(SKIP_NETWORK)('RC1: Cumulative OOR exposure tracking', () => {
     vi.spyOn(wallet.sdkWallet, 'sendBitcoin').mockResolvedValue('mock-txid');
 
     // Limit is 10% of 20M = 2M. Already 1.5M preconfirmed.
-    // 400K more → total 1.9M → should pass
-    await expect(wallet.sendBitcoin({ address: 'tark1mock', amount: 400_000 }))
-      .resolves.toBe('mock-txid');
+    try {
+      // 400K more → total 1.9M → should pass
+      await expect(wallet.sendBitcoin({ address: 'tark1mock', amount: 400_000 }))
+        .resolves.toBe('mock-txid');
 
-    // 600K more → total 2.1M → should fail (exceeds 2M cap)
-    await expect(wallet.sendBitcoin({ address: 'tark1mock', amount: 600_000 }))
-      .rejects.toThrow(OorLimitExceededError);
+      // 600K more → total 2.1M → should fail (exceeds 2M cap)
+      await expect(wallet.sendBitcoin({ address: 'tark1mock', amount: 600_000 }))
+        .rejects.toThrow(OorLimitExceededError);
+    } finally {
+      // A real wallet holds the SDK's indexer SSE subscription and the
+      // VtxoManager timers (#10). Undisposed, they wedge this fork at exit —
+      // which is what froze every CI run since 2026-07-26: the file's tests
+      // all pass, the fork never exits, and the next file never starts.
+      await wallet.dispose();
+    }
   }, 15_000);
 
   it('fragmented drain attack blocked by cumulative OOR', async () => {
@@ -70,21 +78,25 @@ describe.skipIf(SKIP_NETWORK)('RC1: Cumulative OOR exposure tracking', () => {
       return 'txid';
     });
 
-    // Send 200K sats 10 times. Limit is 2M.
-    // Sends 1-10: preconfirmed goes 0→200K→...→1.8M
-    // Send 11: preconfirmed=2M, 2M + 200K > 2M → reject
-    let successCount = 0;
-    for (let i = 0; i < 15; i++) {
-      try {
-        await wallet.sendBitcoin({ address: 'tark1mock', amount: 200_000 });
-        successCount++;
-      } catch (err) {
-        expect(err).toBeInstanceOf(OorLimitExceededError);
-        break;
+    try {
+      // Send 200K sats 10 times. Limit is 2M.
+      // Sends 1-10: preconfirmed goes 0→200K→...→1.8M
+      // Send 11: preconfirmed=2M, 2M + 200K > 2M → reject
+      let successCount = 0;
+      for (let i = 0; i < 15; i++) {
+        try {
+          await wallet.sendBitcoin({ address: 'tark1mock', amount: 200_000 });
+          successCount++;
+        } catch (err) {
+          expect(err).toBeInstanceOf(OorLimitExceededError);
+          break;
+        }
       }
+      // Should succeed ~10 times (2M / 200K), then fail
+      expect(successCount).toBe(10);
+    } finally {
+      await wallet.dispose(); // see RC1 — undisposed wallets wedge the fork
     }
-    // Should succeed ~10 times (2M / 200K), then fail
-    expect(successCount).toBe(10);
   }, 15_000);
 });
 

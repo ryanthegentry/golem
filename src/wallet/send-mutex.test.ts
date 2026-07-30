@@ -13,6 +13,9 @@ import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
 import { walletBalance } from '../test/wallet-balance.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -25,6 +28,7 @@ describe.skipIf(SKIP_NETWORK)('Send mutex (HIGH-003)', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
   }, 15_000);
 
   it('rejects second concurrent send when cumulative exceeds cap', async () => {

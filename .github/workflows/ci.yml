@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A hung run used to sit silently until manually cancelled (every run since
+    # 2026-07-26). Bound it: a hang is a visible failure, not a 6-hour wait.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,7 +20,11 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run typecheck --if-present
-      - run: npm test
+      # Single worker on the runner: with the default one-fork-per-core, each
+      # fork imports the Ark SDK + native sqlite, and a worker dying (OOM) is
+      # invisible — vitest waits on it forever with exactly the observed
+      # signature (last file never reported, no summary, no failure output).
+      - run: npm test -- --maxWorkers=1
 
   secret-scan:
     runs-on: ubuntu-latest

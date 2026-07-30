@@ -186,7 +186,14 @@ describe('checkDataDirDurability', () => {
   });
 
   it('never throws when the directory cannot be written', () => {
-    const report = checkDataDirDurability('/proc/nonexistent/wallet', {
+    // A path whose parent is a FILE fails mkdir with ENOTDIR immediately on
+    // every platform, root or not. Never use /proc for this: procfs refuses
+    // mkdir with ENOENT, which sends Node's recursive-mkdirSync retry logic
+    // into an unpreemptable infinite syscall loop (43k mkdirat/3s measured)
+    // — the silent spin that froze every Linux CI run from 2026-07-26 on.
+    const fileAsParent = path.join(tmpDir, 'not-a-dir');
+    fs.writeFileSync(fileAsParent, '');
+    const report = checkDataDirDurability(path.join(fileAsParent, 'wallet'), {
       readMountTable: () => null,
     });
     expect(report.durable).toBe(false);

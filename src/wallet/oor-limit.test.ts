@@ -6,6 +6,9 @@ import { getNetworkConfig } from '../config/networks.js';
 import { OorLimitExceededError } from './errors.js';
 import { walletBalance } from '../test/wallet-balance.js';
 import { SKIP_NETWORK } from '../test/network-gate.js';
+import { walletTeardown } from '../test/wallet-teardown.js';
+
+const track = walletTeardown();
 
 const MUTINYNET_CONFIG = walletConfigFromNetwork(getNetworkConfig('mutinynet'));
 
@@ -23,6 +26,7 @@ describe.skipIf(SKIP_NETWORK)('OOR exposure limits', () => {
       ...MUTINYNET_CONFIG,
       dataDir: null,
     });
+    track(wallet);
   }, 15_000);
 
   it('sendBitcoin succeeds when amount is under the limit', async () => {
@@ -119,6 +123,7 @@ describe.skipIf(SKIP_NETWORK)('OOR exposure limits', () => {
       oorLimitFraction: 0.05, // 5%
       oorLimitMinSats: 500_000, // 0.005 BTC floor
     });
+    track(customWallet);
 
     // 20M sats. 5% = 1M > 500K floor. Limit = 1M.
     vi.spyOn(customWallet.sdkWallet, 'getBalance').mockResolvedValue(walletBalance({

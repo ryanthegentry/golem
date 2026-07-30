@@ -35,6 +35,4 @@ export async function payLightningInvoice(invoice: string): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     exitWithError(msg);
   }
-
-  process.exit(0); // Force exit — SwapManager WebSocket cleanup hangs
 }

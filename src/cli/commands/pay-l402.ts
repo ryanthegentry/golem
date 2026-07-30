@@ -247,8 +247,9 @@ async function fetchWithL402Token(
     console.error(`\nWarning: Payment succeeded but server returned ${authRes.status}.`);
   }
 
-  // Force exit — SwapManager's WebSocket cleanup is noisy and hangs
-  process.exit(authRes.status === 200 ? 0 : 1);
+  // exitCode, not exit(): a forced exit discards buffered stdout when it is
+  // a pipe, and skips the central teardown that zeroes the signer key.
+  process.exitCode = authRes.status === 200 ? 0 : 1;
 }
 
 /** Print response body, pretty-printing JSON when possible. */
