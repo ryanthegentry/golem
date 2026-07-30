@@ -160,7 +160,12 @@ describe('balance snapshot persistence', () => {
   });
 
   it('never throws when the directory is unwritable', () => {
-    expect(() => writeBalanceSnapshot('/proc/nonexistent/nope', snap({ total: 1 }))).not.toThrow();
+    // file-as-parent → ENOTDIR, portable and immediate. /proc paths are a
+    // landmine: procfs answers mkdir with ENOENT and can spin Node's
+    // recursive mkdirSync forever (see data-durability.test.ts).
+    const fileAsParent = path.join(dir, 'not-a-dir');
+    fs.writeFileSync(fileAsParent, '');
+    expect(() => writeBalanceSnapshot(path.join(fileAsParent, 'nope'), snap({ total: 1 }))).not.toThrow();
   });
 
   /**
