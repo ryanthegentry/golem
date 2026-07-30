@@ -43,7 +43,11 @@ describe('formatStatus', () => {
 
   it('shows nearest expiry when VTXOs exist', () => {
     const balance = { total: 1000, available: 1000, settled: 1000, preconfirmed: 0, boarding: 0 } as any;
-    const futureMs = Date.now() + 48 * 3600 * 1000; // 48 hours from now
+    // 48h plus a buffer: with exactly 48h, the assertion only holds when
+    // formatStatus's own Date.now() lands in the same millisecond as this
+    // one — one elapsed ms floors the duration to 47h → "1d 23h". Fast dev
+    // machines win that race; a loaded CI runner does not.
+    const futureMs = Date.now() + 48 * 3600 * 1000 + 60_000;
     const vtxos = [{ value: 1000, virtualStatus: { state: 'settled', batchExpiry: futureMs } }] as any[];
     const agent = { running: true };
     const net = { golemNetwork: 'mutinynet' } as any;
