@@ -33,6 +33,10 @@ import { createInternalApi } from '../l402/internal-api.js';
 import { FileRootKeyStore } from '../l402/macaroon.js';
 import { MacaroonStore } from '../l402/macaroon-store.js';
 import { createLightning, ensureSwapManagerHealthy, getPollMonitor, runSwapCleanup } from '../lightning/index.js';
+import { decodeInvoice } from '@arkade-os/boltz-swap';
+import { createPayInvoiceRoute, resolveCapsFromEnv } from './pay-invoice.js';
+import { createOutflowLedger } from './pay-outflow.js';
+import { createPayAudit } from './pay-audit.js';
 import { initWalletWithRetry } from './init-retry.js';
 import { resolveWalletDataDir, resolveL402DataDir } from './data-dir.js';
 import { checkDataDirDurability, formatDurabilityLog } from './data-durability.js';
@@ -150,6 +154,17 @@ await observeBalance();
 
 const apiKey = process.env.GOLEM_API_KEY;
 
+// Optional dedicated credential for the one route that spends money. When set, the primary
+// GOLEM_API_KEY is NOT sufficient for /api/pay-invoice — which is the point: the primary key
+// gates read endpoints all over the app and is the more widely-copied secret of the two.
+const payApiKey = process.env.GOLEM_PAY_API_KEY;
+
+// Optional: refuse pay-invoice requests that did not arrive over Railway private networking.
+// Off by default so a local or single-service deployment still works.
+const requirePrivateHost = process.env.GOLEM_PAY_REQUIRE_PRIVATE_HOST === '1';
+
+const payConfig = resolveCapsFromEnv(process.env);
+
 // --- L402 Internal API ---
 
 const rootKeyStore = new FileRootKeyStore(l402DataDir);
@@ -215,6 +230,12 @@ app.get('/health', (c) => c.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/api/*', async (c, next) => {
   if (!apiKey) {
     return c.json({ error: 'GOLEM_API_KEY required. Set env var to enable API.' }, 403);
+  }
+  // When a dedicated pay key is configured, /api/pay-invoice enforces THAT credential itself
+  // and the primary key must not be accepted there. Skipping the primary check is what lets the
+  // route see the request at all; it is strictly narrowing, never widening.
+  if (payApiKey && c.req.path === '/api/pay-invoice') {
+    return next();
   }
   if (!validateBearerToken(c.req.header('Authorization'), apiKey)) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -321,6 +342,33 @@ app.post('/api/receive', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 });
+
+// Lightning payer for the hosted 402index settlement router. Rate-limited to /api/send's
+// 10-per-minute on its own window, and capped per call and per UTC day against the amount the
+// wallet is ACTUALLY debited — see pay-invoice.ts for why the invoice's face value is the wrong
+// quantity to meter (red-team 2026-07-29, CRITICAL-001).
+//
+// `wallet.sdkWallet.send` is the same unguarded path the SDK's sendLightningPayment used, so it
+// still bypasses GolemWallet's OOR limit and send lock (red-team HIGH-001, open). Switching this
+// one line to `wallet.sendBitcoin` is the fix, once its interaction with the send lock is settled.
+console.log(
+  `Pay-invoice caps: ${payConfig.maxSatsPerCall} sats/call, ${payConfig.maxSatsPerDay} sats/day, ` +
+    `timeout ${payConfig.timeoutMs}ms` +
+    `${payApiKey ? ', dedicated key' : ''}${requirePrivateHost ? ', private-host only' : ''}`,
+);
+
+app.route('/api/pay-invoice', createPayInvoiceRoute({
+  lightning,
+  send: (args) => wallet.sdkWallet.send(args),
+  decode: decodeInvoice,
+  caps: payConfig,
+  outflow: createOutflowLedger(l402DataDir),
+  audit: createPayAudit(l402DataDir),
+  rateLimit: { timestamps: [], max: 10, windowMs: 60_000 },
+  timeoutMs: payConfig.timeoutMs,
+  payApiKey,
+  requirePrivateHost,
+}));
 
 app.post('/api/onboard', async (c) => {
   try {
