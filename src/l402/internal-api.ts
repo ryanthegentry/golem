@@ -29,6 +29,7 @@ import type { BoltzPollMonitor } from '../lightning/boltz-resilience.js';
 import type { DurabilityReport } from '../server/data-durability.js';
 import { spendableSats } from '../wallet/spendable-balance.js';
 import type { BalanceChange } from '../agent/balance-monitor.js';
+import { SwapCreationMonitor } from './swap-creation-monitor.js';
 
 interface InternalApiConfig {
   lightning: ArkadeSwaps;
@@ -41,6 +42,27 @@ interface InternalApiConfig {
   refreshAgentRunning?: () => boolean;
   satsEarnedTotal?: () => number;
   apiKey?: string;
+  /**
+   * Tracks whether swaps can actually be created, from the outcomes of real challenge
+   * attempts. Injectable so another surface can share the same view; one is created here
+   * when omitted. See swap-creation-monitor.ts for why this is observed rather than probed.
+   */
+  swapCreationMonitor?: SwapCreationMonitor;
+  /**
+   * Whether the swap rail has been declared gone by an operator. When true we stop calling
+   * the provider entirely rather than failing against it every thirty minutes.
+   *
+   * Added 2026-08-05, after Boltz shut swaps down indefinitely and said why: sustained
+   * automated probing they cannot out-patch. We had been sending them ~70 failed
+   * swap-creation POSTs a day for three days, from a watchdog that mints a challenge every
+   * thirty minutes and never pays it. Continuing to do that to a bootstrapped team under
+   * active attack is both useless — we already know the answer — and precisely the traffic
+   * they described as the problem.
+   *
+   * Defaults to the `GOLEM_SWAP_RAIL_WITHDRAWN` env var so the rail can be cut, or restored,
+   * without shipping code.
+   */
+  swapRailWithdrawn?: () => boolean;
   /** Supplies the Boltz poll monitor for /internal/lightning-health (golem#2). */
   pollMonitor?: () => BoltzPollMonitor | null;
   /**
@@ -65,7 +87,38 @@ interface InternalApiConfig {
 
 export function createInternalApi(config: InternalApiConfig): Hono {
   const { lightning, wallet, rootKeyStore, macaroonStore, networkConfig, startTime } = config;
+  const swapCreationMonitor = config.swapCreationMonitor ?? new SwapCreationMonitor();
+  const swapRailWithdrawn =
+    config.swapRailWithdrawn ?? (() => process.env.GOLEM_SWAP_RAIL_WITHDRAWN === 'true');
   const app = new Hono();
+
+  /**
+   * Announce a change in whether we can take payments at all. Fires on the edge only — the
+   * monitor returns a transition just once per outage — so a multi-hour refusal pages once
+   * rather than every 30 minutes for the length of it.
+   */
+  async function announceCreationTransition(
+    transition: 'broke' | 'recovered' | null,
+    detail: string,
+  ): Promise<void> {
+    if (!transition || !config.alertManager) return;
+    if (transition === 'broke') {
+      await config.alertManager.alert(
+        'swap-creation-unavailable',
+        `L402 swap creation is unavailable — no invoice can be issued and the paywall cannot take payment. Last error: ${detail}`,
+        'CRITICAL',
+      );
+      return;
+    }
+    // Clear the cooldown so the next outage alerts immediately rather than waiting one out.
+    config.alertManager.clear('swap-creation-unavailable');
+    await config.alertManager.alert(
+      'swap-creation-recovered',
+      'L402 swap creation has recovered — invoices are being issued again.',
+      'INFO',
+    );
+    config.alertManager.clear('swap-creation-recovered');
+  }
 
   // Security headers on all responses
   app.use('*', secureHeaders());
@@ -114,8 +167,28 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         return c.json({ error: 'Invalid duration_hours' }, 400);
       }
 
-      // Create Lightning invoice via Boltz reverse swap
-      const invoiceResult = await lightning.createLightningInvoice({ amount: priceSats });
+      // The rail is declared gone — answer without touching the provider. Asking a swap
+      // service that has publicly stopped, every thirty minutes, teaches us nothing and
+      // adds to the automated load that stopped it.
+      if (swapRailWithdrawn()) {
+        return c.json({ error: 'Swap rail withdrawn — no invoice can be issued' }, 503);
+      }
+
+      // Create Lightning invoice via Boltz reverse swap.
+      //
+      // This call is the health check. Every real attempt teaches the monitor whether the
+      // capability we sell is available, which is the question `boltzReachable` could not
+      // answer on 2026-08-03: Boltz was reachable and creation was off, so `/version` said
+      // 200 while nothing could be sold for three hours.
+      let invoiceResult;
+      try {
+        invoiceResult = await lightning.createLightningInvoice({ amount: priceSats });
+      } catch (creationErr) {
+        const detail = creationErr instanceof Error ? creationErr.message : String(creationErr);
+        await announceCreationTransition(swapCreationMonitor.recordFailure(detail), detail);
+        throw creationErr;
+      }
+      await announceCreationTransition(swapCreationMonitor.recordSuccess(), '');
 
       // Mint time-based macaroon with expires_at caveat
       const macResult = mintTimedL402Macaroon(rootKeyStore, {
@@ -224,8 +297,19 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         aspReachable = res.ok;
       } catch { /* network error — reported as unreachable */ }
 
+      // A withdrawn rail overrides whatever the monitor last observed. Without this the
+      // status would report the final pre-withdrawal verdict forever, since nothing calls
+      // the provider any more and the monitor only learns from real attempts.
+      const swapCreation = swapRailWithdrawn()
+        ? { ...swapCreationMonitor.getHealth(), creatable: false, classification: 'withdrawn' as const }
+        : swapCreationMonitor.getHealth();
+
       return c.json({
-        healthy: true,
+        // `healthy` means "this gateway can take a payment right now", not "the process is
+        // up" and not "Boltz answers pings". It was a hardcoded `true` until 2026-08-03,
+        // when it reported healthy for 3h17m through a total inability to issue an invoice.
+        // Whatever else is wired in here later, it has to stay answerable by a buyer.
+        healthy: swapCreation.creatable,
         network: networkConfig.golemNetwork,
         walletBalanceSats: balance.total,
         // `total` alone is misleading since sdk 0.4.51: it also carries funds that cannot be
@@ -245,12 +329,17 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         // 2026-07-26. `paidMacaroons` is the number that means business.
         paidMacaroons: macaroonStore.verifiedCount(),
         unpaidMacaroons: macaroonStore.activeCount() - macaroonStore.verifiedCount(),
+        // Liveness on the dependency. Kept because "Boltz is unreachable" and "Boltz is
+        // refusing to create swaps" are genuinely different diagnoses and the pair of them
+        // together tells you which. It is no longer mistaken for readiness.
         boltzReachable,
         aspReachable,
+        // Readiness for the capability, from real challenge outcomes rather than a probe.
+        swapCreation,
         uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
         satsEarnedTotal: config.satsEarnedTotal ? config.satsEarnedTotal() : 0,
         lastAlert: config.alertManager?.lastAlertTime ?? null,
-      });
+      }, swapCreation.creatable ? 200 : 503);
     } catch (err) {
       console.error('/l402/status error:', err instanceof Error ? err.message : err);
       return c.json({
