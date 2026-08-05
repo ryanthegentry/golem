@@ -48,6 +48,21 @@ interface InternalApiConfig {
    * when omitted. See swap-creation-monitor.ts for why this is observed rather than probed.
    */
   swapCreationMonitor?: SwapCreationMonitor;
+  /**
+   * Whether the swap rail has been declared gone by an operator. When true we stop calling
+   * the provider entirely rather than failing against it every thirty minutes.
+   *
+   * Added 2026-08-05, after Boltz shut swaps down indefinitely and said why: sustained
+   * automated probing they cannot out-patch. We had been sending them ~70 failed
+   * swap-creation POSTs a day for three days, from a watchdog that mints a challenge every
+   * thirty minutes and never pays it. Continuing to do that to a bootstrapped team under
+   * active attack is both useless — we already know the answer — and precisely the traffic
+   * they described as the problem.
+   *
+   * Defaults to the `GOLEM_SWAP_RAIL_WITHDRAWN` env var so the rail can be cut, or restored,
+   * without shipping code.
+   */
+  swapRailWithdrawn?: () => boolean;
   /** Supplies the Boltz poll monitor for /internal/lightning-health (golem#2). */
   pollMonitor?: () => BoltzPollMonitor | null;
   /**
@@ -73,6 +88,8 @@ interface InternalApiConfig {
 export function createInternalApi(config: InternalApiConfig): Hono {
   const { lightning, wallet, rootKeyStore, macaroonStore, networkConfig, startTime } = config;
   const swapCreationMonitor = config.swapCreationMonitor ?? new SwapCreationMonitor();
+  const swapRailWithdrawn =
+    config.swapRailWithdrawn ?? (() => process.env.GOLEM_SWAP_RAIL_WITHDRAWN === 'true');
   const app = new Hono();
 
   /**
@@ -148,6 +165,13 @@ export function createInternalApi(config: InternalApiConfig): Hono {
       }
       if (isNaN(durationHours) || durationHours <= 0) {
         return c.json({ error: 'Invalid duration_hours' }, 400);
+      }
+
+      // The rail is declared gone — answer without touching the provider. Asking a swap
+      // service that has publicly stopped, every thirty minutes, teaches us nothing and
+      // adds to the automated load that stopped it.
+      if (swapRailWithdrawn()) {
+        return c.json({ error: 'Swap rail withdrawn — no invoice can be issued' }, 503);
       }
 
       // Create Lightning invoice via Boltz reverse swap.
@@ -273,7 +297,12 @@ export function createInternalApi(config: InternalApiConfig): Hono {
         aspReachable = res.ok;
       } catch { /* network error — reported as unreachable */ }
 
-      const swapCreation = swapCreationMonitor.getHealth();
+      // A withdrawn rail overrides whatever the monitor last observed. Without this the
+      // status would report the final pre-withdrawal verdict forever, since nothing calls
+      // the provider any more and the monitor only learns from real attempts.
+      const swapCreation = swapRailWithdrawn()
+        ? { ...swapCreationMonitor.getHealth(), creatable: false, classification: 'withdrawn' as const }
+        : swapCreationMonitor.getHealth();
 
       return c.json({
         // `healthy` means "this gateway can take a payment right now", not "the process is

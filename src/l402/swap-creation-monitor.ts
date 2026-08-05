@@ -28,8 +28,12 @@
  * `transient` — the request did not get a clean answer: dropped connection, timeout, 5xx.
  * Jul 28–31 produced 2–7 of these a day and they self-healed every time, so a single one
  * means nothing and only a run of them is worth acting on.
+ *
+ * `withdrawn` — an operator has declared the rail gone, so we are not calling it. Not
+ * discovered and not an incident: it is the configured state of the system. See
+ * `swapRailWithdrawn` in internal-api.ts for why we stop asking rather than keep probing.
  */
-export type CreationFailureClass = 'refused' | 'transient';
+export type CreationFailureClass = 'refused' | 'transient' | 'withdrawn';
 
 /** What changed as a result of recording an outcome — the thing worth alerting on. */
 export type CreationTransition = 'broke' | 'recovered';
