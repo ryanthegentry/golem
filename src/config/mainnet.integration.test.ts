@@ -21,7 +21,11 @@ describe.skipIf(SKIP)('Integration: live APIs', () => {
     expect(info.network).toBe('bitcoin');
   }, 15000);
 
-  it('POST https://api.ark.boltz.exchange/v2/swap/reverse returns limits (min <= 333 sats)', async () => {
+  // Named POST until 2026-08-03; it has always been a GET. That mattered on the day Boltz
+  // disabled swap creation: reads like this one stayed green throughout, so a test that
+  // looked like it exercised creation was in fact evidence of nothing. Creation health is
+  // tracked from real challenge outcomes now — see l402/swap-creation-monitor.ts.
+  it('GET https://api.ark.boltz.exchange/v2/swap/reverse returns pair limits (min <= 333 sats)', async () => {
     // Boltz v2 API: GET /v2/swap/reverse to get pair info
     const res = await fetch('https://api.ark.boltz.exchange/v2/swap/reverse', {
       signal: AbortSignal.timeout(10000),
